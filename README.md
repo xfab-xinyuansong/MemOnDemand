@@ -28,7 +28,7 @@ active-state budget. Compact records route each query; selected source-resolved 
 support the answer; observed use updates which nodes remain easy to reuse.
 
 <p align="center">
-  <img src="assets/retrieval-pipeline.png" alt="MemOnDemand retrieval pipeline" width="78%">
+  <img src="assets/dynamic-hierarchy.png" alt="Dynamic multi-level memory construction and coarse-to-fine retrieval" width="96%">
 </p>
 
 ## What MemOnDemand Provides
@@ -171,10 +171,6 @@ and [Production checklist](docs/production.md).
 ## Three Core Mechanisms
 
 ### 1. Dynamic Multi-Level Hierarchy
-
-<p align="center">
-  <img src="assets/dynamic-hierarchy.png" alt="Dynamic multi-level memory construction and coarse-to-fine retrieval" width="96%">
-</p>
 
 Enterprise collections differ across domains, tenants, and update patterns, so one fixed
 taxonomy cannot fit every repository. MemOnDemand anchors L0 records to stable source
