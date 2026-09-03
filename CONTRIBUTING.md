@@ -31,7 +31,7 @@ make build
 
 ## Documentation Map
 
-- Public APIs: `docs/api-reference.md`
+- API settings: the short `API` section in `README.md`
 - Deployment patterns: `docs/integration.md`
 - Operational checks: `docs/observability.md` and `docs/production.md`
 - Release process: `docs/release.md`
