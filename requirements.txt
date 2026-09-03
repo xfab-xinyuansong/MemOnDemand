@@ -1,0 +1,24 @@
+# Full MemOnDemand environment.
+# For a smaller install, use pyproject extras such as:
+#   pip install -e ".[local]"
+#   pip install -e ".[llm,eval]"
+
+numpy>=1.24
+pandas>=2.0
+pyarrow>=12.0
+scikit-learn>=1.3
+rank-bm25>=0.2.2
+chromadb>=0.4
+
+# Local embedding backend
+sentence-transformers>=2.2
+torch>=2.0
+
+# LLM providers and token accounting
+httpx>=0.24
+openai>=1.0
+requests>=2.31
+tiktoken>=0.5
+
+# Evaluation
+rouge-score>=0.1.2

@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use MemOnDemand in your research or product prototype, please cite this software artifact."
+title: "MemOnDemand: Hierarchical Memory Retrieval with Event-Driven Evidence Promotion"
+authors:
+  - name: "Cielara AI"
+year: 2026
+license: MIT
+repository-code: "https://github.com/xfab-xinyuansong/MemOnDemand"
+url: "https://cielara.ai"
+keywords:
+  - enterprise retrieval
+  - memory systems
+  - hierarchical retrieval
+  - retrieval-augmented generation
