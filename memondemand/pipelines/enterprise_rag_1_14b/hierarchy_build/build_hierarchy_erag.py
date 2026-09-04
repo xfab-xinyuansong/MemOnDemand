@@ -1,26 +1,4 @@
-"""Build a dynamic hierarchy over EnterpriseRAG-Bench L0 records.
-
-ERAG L0 parquet columns: doc_id, source_type, title, content, level, text
-Supports the benchmark's corpus-scale tiers, including the expanded 1.14B setting.
-
-Differences from build_hierarchy.py (own_full):
-- No --raw_dir / --l0 split; single --erag_parquet input
-- Column mapping: doc_id→node_id, source_type→tenant_id
-- distilled_text (L0): deterministic  "title: content[:150]"  (no LLM)
-- detailed_text  (L0): "title\\ntext"  (full text)
-- source_evidence_ids: [doc_id]
-- Source types are preserved as tenant identifiers for provenance isolation.
-
-L1/L2 clustering + LLM summarisation logic is identical to build_hierarchy.py
-(imported directly).
-
-Outputs in --out:
-    hierarchy.json          ndjson, one record per line
-    parent_child_index.json
-    build_report.json
-    token_ledger.json
-    token_ledger_with_records.json
-"""
+"""Build a dynamic hierarchy over EnterpriseRAG-Bench L0 records."""
 from __future__ import annotations
 
 import argparse
@@ -38,9 +16,7 @@ import pandas as pd
 REPO_ROOT = Path(os.environ.get("MEMONDEMAND_REPO_ROOT", Path.cwd())).resolve()
 sys.path.insert(0, str(REPO_ROOT))
 
-# ---------------------------------------------------------------------------
-# Reuse shared utilities from build_hierarchy.py
-# ---------------------------------------------------------------------------
+
 from memondemand.pipelines.enterprise_rag_1_14b.hierarchy_build.build_hierarchy import (  # noqa: E402
     # data-classes / ledger
     DualNode,
@@ -72,9 +48,6 @@ from memondemand.pipelines.enterprise_rag_1_14b.runtime import get_alias_config 
 
 logger = logging.getLogger("memondemand.enterprise_rag_1_14b.build_hierarchy_erag")
 
-# ---------------------------------------------------------------------------
-# API key validation
-# ---------------------------------------------------------------------------
 
 def _check_api_keys() -> None:
     """Resolve semantic aliases without reading or printing secret values."""
@@ -82,10 +55,6 @@ def _check_api_keys() -> None:
     get_alias_config(GPT54)
     logger.info("low- and high-level model aliases resolved")
 
-
-# ---------------------------------------------------------------------------
-# ERAG L0 loader
-# ---------------------------------------------------------------------------
 
 ERAG_TENANTS = {
     "slack",
@@ -100,10 +69,6 @@ ERAG_TENANTS = {
 }
 
 
-# tiktoken `encode()` rejects literal special-token strings (`<|endoftext|>` etc.)
-# that appear verbatim in some ERAG documents. Replace them with safe ASCII
-# equivalents before any tokenization. Same character count, no semantic loss
-# for downstream summarization or embedding.
 _TIKTOKEN_SPECIAL_TOKENS = (
     "<|endoftext|>",
     "<|fim_prefix|>",
@@ -191,10 +156,6 @@ def load_erag_l0(parquet_path: Path, head: int = 0) -> List[DualNode]:
     return nodes
 
 
-# ---------------------------------------------------------------------------
-# Acceptance checks
-# ---------------------------------------------------------------------------
-
 def _acceptance_checks(all_nodes: List[DualNode], l0_nodes: List[DualNode]) -> Dict[str, Any]:
     """Run the 3 required acceptance checks and return a dict of results."""
     total = len(all_nodes)
@@ -233,14 +194,6 @@ def _acceptance_checks(all_nodes: List[DualNode], l0_nodes: List[DualNode]) -> D
     }
     return results
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
-
-# v5_llm_distill 2026-06-28: LLM-based L0 distillation (replaces deterministic title+content[:150])
 
 L0_DISTILL_SYSTEM = """You are a precise document summarizer. Given a document, write a single 1-2 sentence summary that captures the main entity, topic, and most important factual claim. No preamble. No quoting. Output the summary text only."""
 
@@ -288,8 +241,7 @@ def _llm_distill_one(node, ledger, alias=GPT54_MINI, max_tokens=200):
 
 def llm_distill_l0_nodes(nodes, ledger, alias=GPT54_MINI, max_workers=12,
                           checkpoint_path=None, checkpoint_every=200):
-    """Replace deterministic L0 distilled_text with LLM-generated summaries.
-    Parallel calls, checkpoint to disk to resume."""
+    """Replace deterministic L0 distilled_text with LLM-generated summaries."""
     import json as _json
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -392,9 +344,6 @@ def main() -> int:
     if not parquet_path.exists():
         raise SystemExit(f"ERROR: parquet not found: {parquet_path}")
 
-    # -----------------------------------------------------------------------
-    # 1. Load ERAG L0
-    # -----------------------------------------------------------------------
     t_l0 = time.time()
     l0_nodes = load_erag_l0(parquet_path, head=args.dry_run_head)
     t_l0 = time.time() - t_l0
@@ -415,9 +364,6 @@ def main() -> int:
     # --- API key check (only needed for LLM calls; skipped in dry-run) ---
     _check_api_keys()
 
-    # -----------------------------------------------------------------------
-    # 2. Initialise ledger
-    # -----------------------------------------------------------------------
     ledger = TokenLedger(
         run_id=f"step7_erag_{args.tier_label}_{int(time.time())}",
         method="V4_step7_erag_hierarchy",
@@ -426,9 +372,6 @@ def main() -> int:
         alias_chosen_by="memondemand_pipeline",
     )
 
-    # -----------------------------------------------------------------------
-    # 2b. (Optional) Replace deterministic L0 distilled_text with LLM
-    # -----------------------------------------------------------------------
     if args.llm_l0_distill:
         t_l0_llm = time.time()
         logger.info(f"L0 LLM distill enabled (alias={args.low_level_alias}, workers={args.l0_distill_workers})")
@@ -442,9 +385,6 @@ def main() -> int:
         t_l0_llm = time.time() - t_l0_llm
         logger.info(f"L0 LLM distill total wall: {t_l0_llm:.1f}s")
 
-    # -----------------------------------------------------------------------
-    # 3. Build L1 (per-tenant KMeans + gpt_5_4_mini decision/distill)
-    # -----------------------------------------------------------------------
     t_l1 = time.time()
     logger.info(f"Building L1 (max_workers={args.max_workers_l1}) ...")
     l1_nodes, l1_stats = build_l1(
@@ -456,9 +396,6 @@ def main() -> int:
     t_l1 = time.time() - t_l1
     logger.info(f"L1: {len(l1_nodes)} nodes built in {t_l1:.1f}s")
 
-    # -----------------------------------------------------------------------
-    # 4. Build L2 (per-tenant root + gpt_5_4 abstraction)
-    # -----------------------------------------------------------------------
     t_l2 = time.time()
     logger.info(f"Building L2 (max_workers={args.max_workers_l2}) ...")
     l2_nodes, l2_stats = build_l2(
@@ -476,9 +413,6 @@ def main() -> int:
         f"(L0={len(l0_nodes)} L1={len(l1_nodes)} L2={len(l2_nodes)})"
     )
 
-    # -----------------------------------------------------------------------
-    # 5. Write outputs
-    # -----------------------------------------------------------------------
     hierarchy_path = out_dir / "hierarchy.json"
     with open(hierarchy_path, "w") as f:
         for n in all_nodes:
@@ -493,9 +427,6 @@ def main() -> int:
     ledger.export(str(out_dir / "token_ledger.json"), include_raw=False)
     ledger.export(str(out_dir / "token_ledger_with_records.json"), include_raw=True)
 
-    # -----------------------------------------------------------------------
-    # 6. Acceptance checks
-    # -----------------------------------------------------------------------
     ac = _acceptance_checks(all_nodes, l0_nodes)
     logger.info("=== ACCEPTANCE CHECKS ===")
     logger.info(f"  100% dual repr:            {'PASS' if ac['dual_representation_pass'] else 'FAIL'} "
@@ -520,9 +451,6 @@ def main() -> int:
     print(f"  output: {out_dir}")
     print(f"{'='*60}\n")
 
-    # -----------------------------------------------------------------------
-    # 7. Write build report
-    # -----------------------------------------------------------------------
     report = {
         "build_step": "enterprise_rag_1_14b_hierarchy",
         "timestamp_utc": dt.datetime.utcnow().isoformat() + "Z",

@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-Experiment V6: Dual-Memory Prompt v2
-=======================================
-Key changes vs B1 (run_stream_v5.py + MEMONDEMAND_L0_RETRIEVAL=bm25):
-
-1. ANSWER prompt: remove "prefer 1-3" restriction, add "cite ALL relevant EVIDENCE"
-2. Context format: label upper-level nodes [CTX] (no cite), L0 nodes [EVID] (cite these)
-3. Promoted L0 nodes: re-enabled — navigator-found L0 nodes added to evidence context
-4. Navigation: max_steps=3 (one extra step vs cap-2)
-
-Run:
-  cd ~/memondemand
-  python experiments/v5/runners/run_exp_v6.py \
-      --tier erag_10M \
-      --out_dir results/v5_bm25_promo/erag_10M/V5/seed_exp_v6_dual_mem \
-      --max_queries 500
-"""
+"""Experiment V6: Dual-Memory Prompt v2"""
 from __future__ import annotations
 import argparse, json, logging, os, sys, time
 from pathlib import Path

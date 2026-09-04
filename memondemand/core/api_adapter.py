@@ -1,40 +1,4 @@
-"""
-Multi-model API adapter for MemOnDemand.
-
-Provides a single `call(alias, messages, max_tokens, temperature)` interface
-across the default OpenAI-compatible gateway and optional provider aliases:
-
-    general  -> OpenAI-compatible chat endpoint from MEMONDEMAND_API_* env vars
-    mini      -> Azure OpenAI gpt-4o-mini
-    standard  -> Azure OpenAI gpt-4o
-    complex   -> AWS Bedrock claude-opus-4-8 (us.anthropic.claude-opus-4-8)
-    gpt_large -> AWS Bedrock openai.gpt-oss-120b-1:0 (via Converse API)
-
-Preserved as an experimental option; for high-level abstract reasoning
-experiments prefer `gpt_5_5` (Bedrock /responses).
-    gpt_5_4   -> AWS Bedrock Mantle openai.gpt-5.4 (via OpenAI /responses API)
-    gpt_5_5   -> AWS Bedrock Mantle openai.gpt-5.5 reasoning model (/responses)
-
-Credentials are read from environment variables ONLY. No literal keys or
-secret values are ever logged or written to disk by this module.
-
-Returned record (per successful call):
-    {
-        "text": str,
-        "usage": {"input_tokens": int, "output_tokens": int},
-        "latency_ms": float,
-        "model": str,        # the model id used
-        "provider": str,     # "azure" | "bedrock"
-        "alias": str,        # "mini" | "standard" | "complex"
-        "cost_usd": float,   # estimated USD cost
-    }
-
-Constraints (implementation note):
-- No literal API keys / tokens in source.
-- No raw key / bearer value ever in logs.
-- Logs only include provider, model, alias, input/output tokens,
-  latency, cost, retry counts.
-"""
+"""Multi-model API adapter for MemOnDemand."""
 
 from __future__ import annotations
 
@@ -51,10 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# ---------------------------------------------------------------------------
-# .env loading (no third-party dep). Reads file but values are kept only in
-# memory; never echoed.
-# ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(os.environ.get("MEMONDEMAND_REPO_ROOT", Path.cwd())).resolve()
 DEFAULT_ENV_PATH = Path(os.environ.get("MEMONDEMAND_ENV_FILE", PROJECT_ROOT / ".env"))
@@ -90,10 +50,6 @@ def load_env(env_path: Path = DEFAULT_ENV_PATH) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Logging setup. Default formatter never receives raw secrets.
-# ---------------------------------------------------------------------------
-
 logger = logging.getLogger("memondemand.api_adapter")
 if not logger.handlers:
     h = logging.StreamHandler(sys.stderr)
@@ -101,11 +57,6 @@ if not logger.handlers:
     logger.addHandler(h)
 logger.setLevel(logging.INFO)
 
-
-# ---------------------------------------------------------------------------
-# Pricing table (USD per 1M tokens). Approximate public list prices as of
-# 2026-06. Used only for cost estimation in logs; never authoritative.
-# ---------------------------------------------------------------------------
 
 PRICING: Dict[str, Dict[str, float]] = {
     # Azure OpenAI list prices
@@ -132,21 +83,12 @@ def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     ) * p["output"]
 
 
-# ---------------------------------------------------------------------------
-# Provider alias config.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class AliasConfig:
     alias: str
     provider: str  # "openai_compatible" | "azure" | "bedrock" | "bedrock_responses"
     model: str     # model id (azure deployment name OR bedrock model id)
-    # Optional flags for provider-specific quirks.
-    # chat_param_quirk values:
-    #   ""                         -> default (max_tokens + temperature)
-    #   "max_completion_tokens"    -> reasoning model: send max_completion_tokens,
-    #                                 DO NOT send temperature (=1.0 only)
+
     chat_param_quirk: str = ""
     api_version: str = "2024-08-01-preview"
 
@@ -187,11 +129,7 @@ def get_alias_config(alias: str) -> AliasConfig:
             alias="gpt_5_4", provider="bedrock_responses", model=model_id
         )
     if alias == "gpt_5_4_mini":
-        # the MemOnDemand model-routing design + v4/configs/models.yaml: gpt_5_4_mini lives on Azure
-        # (<your-azure-resource>), deployment "gpt-5.4-mini". It is a
-        # reasoning model — must use max_completion_tokens and MUST NOT send
-        # temperature != 1.0. Never silently fall back to gpt-4o-mini (routing
-        # rule, 2026-06-09 02:45 UTC).
+
         deployment = os.environ.get("AZURE_GPT54_MINI_DEPLOYMENT", "gpt-5.4-mini")
         return AliasConfig(
             alias="gpt_5_4_mini",
@@ -202,7 +140,7 @@ def get_alias_config(alias: str) -> AliasConfig:
         )
     if alias == "gpt_5_4_azure":
         # Azure full model fallback: gpt-5.4 deployment NOT available on this resource.
-        # gpt-4o (gpt-4o-2024-11-20) is the strongest available. Probed 2026-07-04.
+
         deployment = os.environ.get("AZURE_GPT4O_DEPLOYMENT", "gpt-4o")
         return AliasConfig(
             alias="gpt_5_4_azure",
@@ -222,11 +160,6 @@ def get_alias_config(alias: str) -> AliasConfig:
     )
 
 
-# ---------------------------------------------------------------------------
-# HTTP helper. Uses urllib to avoid heavy deps.
-# ---------------------------------------------------------------------------
-
-
 def _http_post(
     url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float
 ) -> Dict[str, Any]:
@@ -235,11 +168,6 @@ def _http_post(
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
     return json.loads(raw.decode("utf-8"))
-
-
-# ---------------------------------------------------------------------------
-# Provider-specific request builders + parsers.
-# ---------------------------------------------------------------------------
 
 
 def _call_openai_compatible(
@@ -286,9 +214,7 @@ def _call_azure(
     timeout: float,
 ) -> Dict[str, Any]:
     endpoint = _require_env("AZURE_OPENAI_ENDPOINT").rstrip("/")
-    # Some Azure AI Foundry endpoints are configured with trailing "/openai/v1"
-    # (OpenAI-compatible REST). For the classic deployment-scoped chat
-    # completions URL we only want the host root.
+
     for suffix in ("/openai/v1", "/openai"):
         if endpoint.endswith(suffix):
             endpoint = endpoint[: -len(suffix)]
@@ -307,9 +233,7 @@ def _call_azure(
     }
     body: Dict[str, Any] = {"messages": messages}
     if cfg.chat_param_quirk == "max_completion_tokens":
-        # Reasoning model (e.g. gpt-5.4-mini): use max_completion_tokens and
-        # OMIT temperature (only temperature=1.0 is accepted, which is also the
-        # server default — sending it would just cause a 400).
+
         body["max_completion_tokens"] = max_tokens
     else:
         body["max_tokens"] = max_tokens
@@ -442,9 +366,6 @@ def _call_bedrock_converse(
     }
     raw = _http_post(url, headers, body, timeout=timeout)
 
-    # Parse: output.message.content is a list of blocks. Each block may have
-    # a `text` key OR a `reasoningContent.reasoningText.text` key. Prefer
-    # visible text; append reasoning as a fallback/suffix if present.
     text_parts: List[str] = []
     reasoning_parts: List[str] = []
     msg = (raw.get("output") or {}).get("message") or {}
@@ -524,9 +445,7 @@ def _parse_responses_output(raw: Dict[str, Any]) -> str:
     for item in raw.get("output") or []:
         if not isinstance(item, dict):
             continue
-        # Each item has a `content` list of blocks; blocks of type
-        # "output_text" carry `text`. Some items (e.g. "reasoning") have no
-        # visible content and we skip them.
+
         for block in item.get("content") or []:
             if not isinstance(block, dict):
                 continue
@@ -596,11 +515,6 @@ def _call_bedrock_responses(
         "input_tokens": int(usage.get("input_tokens", 0)),
         "output_tokens": int(usage.get("output_tokens", 0)),
     }
-
-
-# ---------------------------------------------------------------------------
-# Public API.
-# ---------------------------------------------------------------------------
 
 
 class APIError(RuntimeError):
@@ -709,19 +623,6 @@ def call(
     raise last_err  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# Sanitization: scrub anything that looks like a key, bearer token,
-# or env-derived secret from a string before logging.
-# ---------------------------------------------------------------------------
-
-# Env values whose literal contents are REAL secrets (API keys, bearer tokens,
-# AWS secret access keys). These must never appear in logs.
-#
-# NOTE: AZURE_OPENAI_ENDPOINT (a hostname), AZURE_OPENAI_MINI / _STANDARD
-# (deployment names like "gpt-4o"), BEDROCK_REGION (e.g. "us-east-1") and
-# BEDROCK_MODEL_COMPLEX (a public model id) are identifiers — not secrets —
-# and ARE expected to appear in logs (the project plan §3 explicitly logs
-# provider + model). We exclude them from the leak scan.
 _SECRET_ENV_KEYS = (
     "AZURE_OPENAI_KEY",
     "MEMONDEMAND_API_KEY",

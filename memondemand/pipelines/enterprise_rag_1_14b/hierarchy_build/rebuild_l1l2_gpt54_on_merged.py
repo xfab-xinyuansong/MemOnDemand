@@ -105,10 +105,6 @@ def main():
             n = json.loads(line)
             nodes[n["node_id"]] = n
 
-    # Build parent->children map from extra.child_node_ids (verified field
-    # in this hierarchy format: L1 nodes have extra.child_node_ids listing
-    # L0 dsid children; L2 nodes have extra.child_node_ids listing L1_xxx
-    # cluster-id children).
     parent_to_children = {}
     for nid, n in nodes.items():
         extra = n.get("extra") or {}

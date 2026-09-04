@@ -1,31 +1,4 @@
-"""Build MemOnDemand's dynamic hierarchy from source-resolved L0 records.
-
-Pipeline:
-    L0 source records
-        ├─ detailed_text  = canonical_label + raw_text + tags + entities + as_of + tenant
-        ├─ distilled_text = canonical_label-derived short summary (deterministic; no LLM)
-        │   With explicit fallback when the label is degenerate.
-        └─ source_evidence_ids = [evidence_span_id, ...] (real L0 evidence refs)
-
-    L1 (per-tenant KMeans cluster of L0 distilled embeddings)
-        ├─ clustering decision validated by gpt_5_4_mini (low-level)
-        ├─ detailed_text = JSON-ish bundle of child distilled_text + per-cluster stats
-        ├─ distilled_text = gpt_5_4_mini summary
-        └─ source_evidence_ids = union of all descendants' L0 evidence
-
-    L2 (per-tenant root summarising L1 nodes)
-        ├─ detailed_text = bundle of L1 distilled_text
-        ├─ distilled_text = gpt_5_4 (high-level abstraction)
-        └─ source_evidence_ids = union of descendants
-
-Outputs (in --out):
-    hierarchy.json     -- list of node records (all levels)
-    build_report.json  -- aggregated build stats + LLM call counts
-    token_ledger.json  -- per-phase / per-model token + cost accounting
-
-The output is a source-resolved, multi-level structure suitable for dual-view
-retrieval and on-demand promotion.
-"""
+"""Build MemOnDemand's dynamic hierarchy from source-resolved L0 records."""
 from __future__ import annotations
 
 import argparse
@@ -65,9 +38,6 @@ from memondemand.methods.token_ledger import (  # noqa: E402
 
 logger = logging.getLogger("memondemand.enterprise_rag_1_14b.build_hierarchy")
 
-# ---------------------------------------------------------------------------
-# Hyper-params
-# ---------------------------------------------------------------------------
 
 L1_TARGET_NODES_PER_CLUSTER = 8     # ~8 L0 children per L1 node
 L1_MAX_CLUSTERS_PER_TENANT = 32     # safety cap; for small tenants we fall back
@@ -80,9 +50,6 @@ EMBED_DIM = 384
 GPT54_MINI = "gpt_5_4_mini"
 GPT54 = "gpt_5_4"
 
-# ---------------------------------------------------------------------------
-# Token utilities
-# ---------------------------------------------------------------------------
 
 _ENC = None
 def enc():
@@ -96,11 +63,6 @@ def tok_count(text: str) -> int:
     if not text:
         return 0
     return len(enc().encode(text))
-
-
-# ---------------------------------------------------------------------------
-# L0 loader (from raw medium_night1 directory)
-# ---------------------------------------------------------------------------
 
 
 def load_l0_raw(medium_night1_dir: Path) -> List[Dict[str, Any]]:
@@ -129,11 +91,6 @@ def filter_to_manifest(l0_nodes: List[Dict[str, Any]],
     logger.info(f"filtered to manifest: {len(filtered)} / {len(l0_nodes)} raw, "
                 f"{len(keep)} expected")
     return filtered
-
-
-# ---------------------------------------------------------------------------
-# L0 dual-rep construction
-# ---------------------------------------------------------------------------
 
 
 def _l0_distilled(label: str, tags: List[str]) -> str:
@@ -240,11 +197,6 @@ def build_l0_dualnodes(l0_raw: List[Dict[str, Any]]) -> List[DualNode]:
     return nodes
 
 
-# ---------------------------------------------------------------------------
-# Embedding + clustering
-# ---------------------------------------------------------------------------
-
-
 _EMBED_MODEL = None
 
 
@@ -283,11 +235,6 @@ def kmeans_cluster(vecs: np.ndarray, n_clusters: int, seed: int = 20260608) -> n
         return np.zeros(len(vecs), dtype=int)
     km = KMeans(n_clusters=n_clusters, n_init=4, random_state=seed)
     return km.fit_predict(vecs)
-
-
-# ---------------------------------------------------------------------------
-# LLM call wrappers (with simple retry, recording into ledger)
-# ---------------------------------------------------------------------------
 
 
 def llm_call_with_ledger(
@@ -337,10 +284,6 @@ def llm_call_with_ledger(
             "success": False, "error": f"{type(last_err).__name__}: {str(last_err)[:200]}",
             "attempts": max_retries + 1}
 
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
 
 L1_DISTILL_SYSTEM = """You are an enterprise memory aggregator. Given a small cluster of related L0 memory snippets from one tenant, produce a SHORT distilled summary that:
 
@@ -400,11 +343,6 @@ def _bundle_children_distilled(children: List[DualNode], max_chars: int = 4000) 
         out.append(snip)
         used += len(snip)
     return "\n".join(out)
-
-
-# ---------------------------------------------------------------------------
-# Build L1 from L0 (per-tenant clustering)
-# ---------------------------------------------------------------------------
 
 
 def _decide_n_clusters(n_l0: int) -> int:
@@ -543,9 +481,7 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
         node_id = f"L1_{tenant}_c{cidx:03d}"
         dt_tok = tok_count(distilled_text)
         det_tok = tok_count(detailed_text)
-        # Guard against the pathological case where distilled accidentally
-        # grew larger than detailed (very rare for L1 since detailed
-        # repeats children). If so, hard-truncate distilled.
+
         if det_tok > 0 and dt_tok >= det_tok:
             ids_full = enc().encode(distilled_text)
             keep_ids = ids_full[: max(1, det_tok - 1)]
@@ -592,11 +528,6 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
             if i % 25 == 0 or i == len(futures):
                 logger.info(f"  L1 progress: {i}/{len(futures)}")
     return l1_nodes, stats
-
-
-# ---------------------------------------------------------------------------
-# L2 from L1 (one node per tenant, gpt_5_4 high-level abstraction)
-# ---------------------------------------------------------------------------
 
 
 def build_l2(l1_nodes: List[DualNode], ledger: TokenLedger,
@@ -675,21 +606,11 @@ def build_l2(l1_nodes: List[DualNode], ledger: TokenLedger,
     return l2_nodes, stats
 
 
-# ---------------------------------------------------------------------------
-# Provenance graph (parent->children) for traceability check
-# ---------------------------------------------------------------------------
-
-
 def build_parent_child_index(all_nodes: List[DualNode]) -> Dict[str, List[str]]:
     """node_id -> list of child node_ids (empty for L0)."""
     out: Dict[str, List[str]] = {n.node_id: list(n.extra.get("child_node_ids", []) or [])
                                  for n in all_nodes}
     return out
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main() -> int:

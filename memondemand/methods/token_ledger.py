@@ -1,20 +1,4 @@
-"""Per-phase, per-model token accounting.
-
-Per the MemOnDemand token-accounting design, production runs report separately:
-  - hierarchy_build_input/output
-  - distilled_representation
-  - detailed_representation
-  - distilled_retrieval/navigation
-  - promotion_decision
-  - promoted_detailed_context
-  - final_answer
-  - per-query and per-correct-answer aggregates
-
-This ledger keeps a single in-memory structure for the lifetime of a run, and
-writes it out at end as JSON. It is thread-safe (one lock around mutations).
-
-It also estimates API cost using a simple per-model price table (configurable).
-"""
+"""Per-phase, per-model token accounting."""
 from __future__ import annotations
 
 import json
@@ -24,21 +8,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
-# ---------------------------------------------------------------------------
-# Price table (USD per 1M tokens). Approximate as of 2026; values can be
-# overridden via TokenLedger(prices={...}).
-# ---------------------------------------------------------------------------
-
 DEFAULT_PRICES = {
     "gpt_5_4_mini": {"input": 0.15, "output": 0.60},
-    "gpt_5_4": {"input": 1.25, "output": 10.00},  # openai.gpt-5.4 via Bedrock-mantle (reference pricing 2026-06-09)
+    "gpt_5_4": {"input": 1.25, "output": 10.00},
     "gpt_4o_mini": {"input": 0.15, "output": 0.60},
 }
 
-
-# ---------------------------------------------------------------------------
-# Categories — the MemOnDemand token-accounting design
-# ---------------------------------------------------------------------------
 
 PHASE_HIERARCHY_BUILD = "hierarchy_build"
 PHASE_DISTILLED_GEN = "distilled_text_gen"

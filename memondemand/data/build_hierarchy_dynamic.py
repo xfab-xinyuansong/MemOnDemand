@@ -1,23 +1,4 @@
-"""
-V5 Dynamic Hierarchy Builder
-==============================================
-Builds a dynamic multi-level hierarchy from ERAG L0 nodes.
-LLM (gpt-5.4) decides depth: CREATE_NEXT_LEVEL | RECLUSTER | STOP
-LLM (gpt-5.4-mini) generates distilled summaries for each cluster node.
-
-Usage:
-  python build_hierarchy_dynamic.py \
-    --tier 10M \
-    --l0_parquet ~/memondemand/manifests/erag_10M_l0_nodes.parquet \
-    --out_dir ~/memondemand/results/v5/erag_10M/hierarchy \
-    --budget_usd 5.0 \
-    --dry_run  # optional: skip LLM calls, use mock responses
-
-Outputs:
-  out_dir/hierarchy.json          # ndjson, one node per line
-  out_dir/build_report.json       # timing + cost + acceptance checks
-  out_dir/decision_log.ndjson     # LLM depth decision audit trail
-"""
+"""V5 Dynamic Hierarchy Builder"""
 
 from __future__ import annotations
 

@@ -1,12 +1,4 @@
-# MemOnDemand model aliases
-# Per the MemOnDemand model-routing design.
-#
-# Resolution policy: each alias maps to exactly one provider/model identifier
-# that has been smoke-tested. If a required alias is missing or its provider is
-# unavailable, the runner MUST fail loudly — NEVER silently fall back to a
-# different family of model.
-#
-# Keep smoke-test results with the run outputs for the project that uses this config.
+# MemOnDemand model aliases and strict provider routing.
 
 aliases:
   gpt_5_4_mini:
@@ -31,7 +23,7 @@ aliases:
     family: "OpenAI gpt-5.4 (Azure)"
     alias_status: "CONFIRMED"
     smoke_test_pass: false
-    notes: "Full model via Azure. Same endpoint as mini. Added 2026-07-04 for B1 pilot."
+    notes: "Full model via Azure using the same endpoint as the mini deployment."
 
   gpt_5_4:
     provider: bedrock_responses
@@ -55,37 +47,13 @@ embedding:
   dim: 384
   notes: "Use an API-backed embedding deployment by overriding MEMONDEMAND_EMBED_* variables."
 
-# Strict bans (READ ME): the runner MUST refuse to operate if any of these
-# providers are referenced. Per the MemOnDemand model-routing policy.
+# Providers rejected by the routing policy.
 forbidden_providers:
   - "gemini"        # keep provider routing explicit
   - "openai_public" # bypassing Azure tenancy
 
-# Strict bans on substitution for gpt_5_4:
-# Model substitutions must be explicit; silent fallback to a weaker model is not allowed.
+# Model substitutions must be explicit.
 gpt_5_4_substitution_policy:
   - rule: "Any reference to alias `gpt_5_4` MUST resolve to a real chat model."
   - rule: "If the alias has `provider: UNRESOLVED`, code MUST raise RuntimeError, not silently fall back to gpt-5.4-mini or gpt-4o*."
   - rule: "Substitutions require an explicit `gpt_5_4_substitute` alias and explicit release approval."
-
-# -----------------------------------------------------------------------------
-# V5 routing notes
-# -----------------------------------------------------------------------------
-# Updates:
-#   - Judge alias changed from gpt_5_4_mini to gpt_5_4 (full Bedrock).
-#   - Judge prompt switched from "strict" to "lenient" wording.
-#   - alias_answer / alias_navigator already point to gpt_5_4.
-#
-# Embedding deployment (PLANNED — BLOCKED ON DEPLOYMENT CREATION):
-#   The Azure resource <your-azure-resource> has no embedding deployment
-#   as of 2026-06-19. Once a deployment exists, set this block and the runner
-#   will pick it up when V5_EMBEDDER=azure:
-#
-# embedding_azure_text3large:
-#   provider: azure
-#   endpoint_env: "AZURE_OPENAI_ENDPOINT"
-#   deployment: "text-embedding-3-large"
-#   api_version: "2024-12-01-preview"
-#   api_key_env: "AZURE_OPENAI_KEY"
-#   dim: 3072
-#   notes: "PLANNED — deployment not yet provisioned (see BUG1_ESCALATION.md)"

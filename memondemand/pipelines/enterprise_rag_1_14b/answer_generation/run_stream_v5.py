@@ -1,19 +1,4 @@
-"""Unified query runner for the MemOnDemand 1.14B pipeline.
-
-Supports 5 methods (case-sensitive):
-  B_flat           — flat top-k over L0 distilled, no hierarchy, no promotion
-  B_fixed_hier     — deterministic top-down BFS over the depth-4 hierarchy
-  B_dynamic_hier   — same BFS (the on-disk hierarchy IS the dynamic one)
-  B_llm_nav        — LLM navigator (DESCEND / LATERAL / ANSWER / STOP_INSUFFICIENT)
-  V5               — LLM navigator + on-demand promotion + decay
-
-The runner combines hierarchical navigation, dual memory representations,
-on-demand promotion, and decay while remaining blind to evaluator-only gold
-answers and source identifiers.
-
-The runner is BLIND to gold answers / gold doc_ids — those are loaded
-only by the evaluator (evaluate_v5.py).
-"""
+"""Unified query runner for the MemOnDemand 1.14B pipeline."""
 from __future__ import annotations
 
 try:
@@ -75,10 +60,6 @@ logging.basicConfig(
 log = logging.getLogger("memondemand.enterprise_rag_1_14b.runner")
 
 
-# ---------------------------------------------------------------------------
-# Hierarchy / nodes
-# ---------------------------------------------------------------------------
-
 VALID_METHODS = {"B_flat", "B_fixed_hier", "B_dynamic_hier", "B_llm_nav", "V5"}
 
 
@@ -101,11 +82,7 @@ def load_hierarchy_jsonl(path: str) -> Dict[str, DualNode]:
 
 
 def build_parent_child(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
-    """children_ids already exist on each node; index them for fast lookup.
-
-    v5_navstart 2026-06-30: erag builder writes child_node_ids (not children_ids);
-    fall back to source_evidence_ids for L1 nodes if both child fields are empty.
-    """
+    """Index child identifiers for fast parent-to-child lookup."""
     out = {}
     for nid, n in hierarchy.items():
         kids = n.extra.get("children_ids", []) or n.extra.get("child_node_ids", []) or []
@@ -118,7 +95,7 @@ def build_parent_child(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
 
 
 def build_parent_child_from_file(path: str) -> Dict[str, List[str]]:
-    """v5_navstart 2026-06-30: erag builder writes child_node_ids inside extra; fall back to source_evidence_ids for L1."""
+    """Build a parent-to-child index from hierarchy records."""
     parent_child: Dict[str, List[str]] = {}
     with open(path) as f:
         for line in f:
@@ -155,17 +132,13 @@ def bucket_by_level(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
     return dict(out)
 
 
-# ---------------------------------------------------------------------------
-# Embedder + cosine index
-# ---------------------------------------------------------------------------
-
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class Embedder:
     def __init__(self, model_name: str = EMBED_MODEL):
         import os as _os, json as _json
-        backend = _os.environ.get("MEMONDEMAND_EMBED_BACKEND", "azure_small")  # 2026-07-30: default changed from minilm to azure_small
+        backend = _os.environ.get("MEMONDEMAND_EMBED_BACKEND", "azure_small")
         self.backend = backend
         # Optional query embedding cache (for azure_large to avoid per-query API)
         self._query_cache = {}
@@ -235,7 +208,6 @@ class Embedder:
         return vecs
 
 
-# v5_bm25 2026-06-27: BM25 L0 retrieval option (env MEMONDEMAND_L0_RETRIEVAL=bm25)
 _BM25_CACHE = {'index': None, 'doc_ids': None}
 def _bm25_tokenize(text):
     if not text: return []
@@ -322,9 +294,6 @@ def _bm25_top_k(ctx, query_text, k, filter_ids=None):
     return [(all_ids[i], float(scores[i])) for i in top_idx]
 
 
-
-
-# v5_drerank 2026-06-29: BM25 top-N -> dense cosine rerank -> top-k
 def _bm25_then_dense_rerank(ctx, query_text, k=12, wide_k=50):
     """BM25 retrieves wide_k candidates, then rerank by dense cosine sim using cached L0 index."""
     import os as _os, json as _json
@@ -348,9 +317,6 @@ def _bm25_then_dense_rerank(ctx, query_text, k=12, wide_k=50):
     return reranked
 
 
-
-
-# v5_dirA 2026-06-30: BM25-guided L1 initial frontier
 def _bm25_guided_l1_frontier(ctx, query_text, bm25_top_k=50, max_l1=8):
     """BM25 top-N L0 hits -> L1 parents (sorted by coverage count) -> top-max_l1 L1 frontier."""
     bm_hits = _bm25_top_k(ctx, query_text, bm25_top_k, filter_ids=None)
@@ -398,10 +364,6 @@ class CosineIndex:
         order = np.argsort(-sims)[:top_k]
         return [(self.ids[i], float(sims[i])) for i in order]
 
-
-# ---------------------------------------------------------------------------
-# Answer prompts (reused style)
-# ---------------------------------------------------------------------------
 
 ANSWER_SYSTEM = """You are an enterprise memory question-answering assistant.
 
@@ -483,7 +445,6 @@ ANSWER_USER_V8_TOP5 = """QUERY: {query}
 Answer (1-3 sentences), then: CITED: <node_ids you used>"""
 
 
-
 # V6.1: Scan-first + citation completeness check — controlled by MEMONDEMAND_V61=1
 ANSWER_SYSTEM_V61 = """You are an enterprise knowledge retrieval system.
 
@@ -558,7 +519,6 @@ def strip_cited(answer_text: str) -> str:
     if not answer_text:
         return ""
     return re.sub(r"\nCITED\s*:\s*[^\n]*", "", answer_text).strip()
-
 
 
 import os as _os_ansmode
@@ -687,12 +647,6 @@ def _format_dual_smart_context(
     return "\n".join(parts) if parts else "(none)"
 
 
-
-
-# ---------------------------------------------------------------------------
-# Navigator (LLM)
-# ---------------------------------------------------------------------------
-
 NAV_SYSTEM = """You navigate a hierarchical enterprise memory to locate evidence for a query.
 
 Hierarchy: L2 = broad topic clusters  →  L1 = fine-grained clusters  →  L0 = source documents
@@ -807,10 +761,6 @@ def parse_nav_json(text: str) -> Dict[str, Any]:
     return {"action": "ANSWER", "chosen_node_ids": [], "rationale": "parse_fail_forced_answer"}
 
 
-# ---------------------------------------------------------------------------
-# Per-query record
-# ---------------------------------------------------------------------------
-
 @dataclass
 class QueryRecord:
     query_id: str
@@ -860,10 +810,6 @@ class QueryRecord:
             d[k] = round(d[k], 4)
         return d
 
-
-# ---------------------------------------------------------------------------
-# Method runner
-# ---------------------------------------------------------------------------
 
 PRICES = {
     "gpt_5_4_mini": {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
@@ -962,7 +908,7 @@ def get_sorted_levels(hierarchy: Dict[str, DualNode]) -> List[str]:
 
 # --- Per-method implementations --------------------------------------------
 
-# v5_fix 2026-06-26: P1 hard cap on cited_evidence_ids (predicted +0.085 F1)
+
 MAX_CITED_PER_QUERY = 5
 
 def _cap_cited(ids, cand_ids):
@@ -1121,9 +1067,7 @@ def run_b_hier_bfs(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
 
     cand_ids = [nid for nid, _, _ in ctx_items]
     cited = parse_cited(answer, cand_ids)
-    # v5 Step C v4 Bug A fix: cited_evidence_ids must ONLY include L0 nodes whose
-    # detailed_text was actually loaded into the answer LLM context (no recursive
-    # subtree expansion).
+
     if not cited:
         cited_l0 = [nid for nid in cand_ids if ctx.hierarchy[nid].level == "L0"]
     else:
@@ -1189,14 +1133,10 @@ def collect_descendant_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
 
 def final_l0_retrieval(ctx: RunnerCtx, q_vec, seed_ids: Sequence[str],
                        k: int, query_text: str = "") -> List[Tuple[str, float]]:
-    """Bug B fix: gather descendant L0 nodes from seed_ids, cosine-rank vs q_vec,
-    return top-k (id, sim) list. If no L0 descendants found, fall back to global L0.
-
-    v5_bm25 2026-06-27: when MEMONDEMAND_L0_RETRIEVAL=bm25, replace cosine ranking
-    with BM25 (unconstrained by hierarchy, global top-k from full corpus)."""
+    """Gather descendant leaf nodes and return the highest-scoring candidates."""
     import os as _os
     if _os.environ.get("MEMONDEMAND_L0_RETRIEVAL", "") == "bm25":
-        # v5_drerank: optional dense rerank after BM25 wide retrieval
+
         if _os.environ.get("MEMONDEMAND_DENSE_RERANK", "0") == "1":
             try:
                 wide_k = int(_os.environ.get("MEMONDEMAND_BM25_WIDE_K", "50"))
@@ -1321,7 +1261,6 @@ def final_l0_retrieval(ctx: RunnerCtx, q_vec, seed_ids: Sequence[str],
     return idx.search(q_vec, top_k=k, filter_ids=l0_pool)
 
 
-
 def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                 use_promotion: bool) -> QueryRecord:
     """LLM navigator (B_llm_nav and V5)."""
@@ -1393,7 +1332,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
 
         decision = parse_nav_json(nav_text)
         action = str(decision.get("action", "ANSWER")).upper().strip()
-        # v5_dirE 2026-06-30: FORCE_FIRST_DESCEND — disallow ANSWER on step 0 if frontier is not all L0
+
         import os as _os_fd
         if rec.n_navigation_steps == 0 and _os_fd.environ.get("MEMONDEMAND_FORCE_FIRST_DESCEND", "0") == "1":
             _front_levels = set()
@@ -1407,7 +1346,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                 action = "DESCEND"
                 if not decision.get("chosen_node_ids"):
                     decision["chosen_node_ids"] = [nid for nid, _ in front[:2]]
-        # v5_fix3 2026-06-27: simple cap@2, no entity-anchor.
+
         if action not in {"DESCEND", "LATERAL", "ANSWER", "STOP_INSUFFICIENT"}:
             action = "ANSWER"
         # Hard cap: after 2 navigation actions (DESCEND/LATERAL) force ANSWER.
@@ -1469,7 +1408,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             import os as _os_dr
             _descend_ranking = _os_dr.environ.get("MEMONDEMAND_DESCEND_RANKING", "cosine")
             if _descend_ranking == "bm25":
-                # v5_dirC 2026-06-30: BM25 within-cluster ranking using L0 (only meaningful at L0)
+
                 # For L0 children, use BM25; otherwise fall back to cosine
                 if child_level == "L0":
                     bm_hits = _bm25_top_k(ctx, query, 16, filter_ids=new_frontier_ids)
@@ -1483,9 +1422,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             rec.t_retrieval_ms += (time.time() - t0) * 1000
             visible_frontier = ranked
 
-            # V5: promotion gate — applies to L0 nodes that just became
-            # visible (or were chosen directly when already at L0). At
-            # upper levels there is no meaningful detailed_text to load.
             if use_promotion and ctx.promotion is not None:
                 tp = time.time()
                 # Candidates: top L0 nodes in the new frontier + any
@@ -1515,9 +1451,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                         decisions, query_idx, state_log=ctx.state_log,
                     )
                     rec.n_promote_events += counts.get("PROMOTE", 0)
-                    # v5_noload 2026-07-02: promotion fires for hierarchy state only.
-                    # Do NOT load detailed_text into promoted_detailed (skip current ANSWER context injection).
-                    # n_promote_events > 0 is satisfied; state updated via apply_decisions.
+
                 rec.t_llm_promotion_seconds += time.time() - tp
             continue
 
@@ -1544,7 +1478,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             continue
 
     # ---- build final context + answer (or honor STOP_INSUFFICIENT) ----
-    # v5_fix2: respect STOP_INSUFFICIENT from navigator (P2)
+
     final_action = str(decision.get("action", "ANSWER")).upper().strip()
     if final_action not in {"ANSWER", "STOP_INSUFFICIENT"}:
         # Out of steps with no terminal — default to ANSWER if any evidence
@@ -1552,10 +1486,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
     rec.final_action = final_action
 
     if final_action == "ANSWER":
-        # v5 Step C v4 Bug B fix: final L0 retrieval pass.
-        # Seed = navigator's chosen ANSWER targets (if any) + visible frontier ids
-        # + promoted nodes. We walk those subtrees to descendant L0 nodes, then
-        # cosine-rank to pick top_k_distilled.
+
         chosen_ans = [c for c in (decision.get("chosen_node_ids") or [])
                       if c in ctx.hierarchy]
         seed_ids: List[str] = []
@@ -1566,17 +1497,11 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
 
         final_l0_hits = final_l0_retrieval(ctx, q_vec, seed_ids, k=ctx.top_k_distilled, query_text=query)
 
-        # v5_bm25_promo 2026-07-02: promotion gate on BM25 candidates
-        # When MEMONDEMAND_L0_RETRIEVAL=bm25 and use_promotion=True, run promotion
-        # decide() on BM25 final hits so promotion events fire despite BM25 path.
         import os as _os_bm25p
         if (use_promotion and ctx.promotion is not None
                 and _os_bm25p.environ.get("MEMONDEMAND_L0_RETRIEVAL", "") in ("bm25", "bm25_promo")):
             _tp_bm25promo = time.time()
-            # v5_bm25_promo FIX: only promote within top_k_distilled candidates
-            # (top-25, not top-50). Nodes beyond top-25 are lower-quality and add noise.
-            # Promoted top-25 nodes are already in section 1 context (l0_in_ctx),
-            # so section 2 skips them - no noise, but n_promote_events still fires.
+
             _bm25_cand_pool = [
                 nid for nid, _ in final_l0_hits[: ctx.top_k_distilled]
                 if (ctx.hierarchy.get(nid) is not None
@@ -1622,7 +1547,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                     if _c3_extra_ids:
                         final_l0_hits = list(final_l0_hits) + _c3_extra_ids[:10]
                 rec.n_promote_events += _bm25_counts.get("PROMOTE", 0)
-                # v5_noload 2026-07-02: promotion fires for hierarchy state only.
+
                 # Do NOT load detailed_text into promoted_detailed.
             rec.t_llm_promotion_seconds += time.time() - _tp_bm25promo
 
@@ -1642,10 +1567,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             ctx_items.append((nid, n.level, _node_text_for_answer(n, is_top_detail=_is_top_det)))
             detailed_tok += n.detailed_tokens or 0
             l0_in_ctx.add(nid)
-        # 2) Promoted detailed nodes (if any) not already included
-        # v5_bm25_promo: when using BM25 retrieval, skip adding promoted nodes to
-        # answer context (they are loaded for hierarchy state update / mark_detail_used
-        # but BM25 top-k already provides the clean retrieval context).
+
         import os as _os_sec2
         _skip_promoted_in_ctx = _os_sec2.environ.get("MEMONDEMAND_L0_RETRIEVAL", "") in ("bm25", "bm25_promo")
         if not _skip_promoted_in_ctx:
@@ -1732,9 +1654,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
         rec.tokens_distilled_context_in = distilled_tok
         rec.cost_usd += cost_for(ctx.alias_answer, in_t, out_t)
 
-        # v5 Step C v4 Bug A fix: cited_evidence_ids must ONLY contain L0 nodes
-        # whose detailed_text was actually in the answer LLM context — NO recursive
-        # subtree expansion (which previously inflated to ~4489 per query).
         cited = parse_cited(answer, cand_ids)
         if cited:
             cited_l0 = [nid for nid in cited if ctx.hierarchy.get(nid) is not None
@@ -1783,10 +1702,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
     rec.t_wall_total_seconds = time.time() - t_wall
     return rec
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -1846,7 +1761,7 @@ def main() -> int:
     by_level = bucket_by_level(hierarchy)
     level_names = sorted(by_level.keys(), key=lambda s: int(s.lstrip("L")))
     top_level = level_names[-1]
-    # v5_navstart 2026-06-30: allow override of navigator start level (e.g., L1 instead of L2 for shallow hierarchies)
+
     _nav_start = os.environ.get("MEMONDEMAND_NAV_START_LEVEL", "").strip()
     if _nav_start and _nav_start in level_names:
         log.info("hierarchy top is %s but MEMONDEMAND_NAV_START_LEVEL=%s — overriding nav start", top_level, _nav_start)
@@ -1893,7 +1808,7 @@ def main() -> int:
     decay: Optional[DecayController] = None
     if args.method == "V5":
         state_log = StateLog(str(state_log_path))
-        # v5_fix 2026-06-26: P3 — skip promotion/decay controllers entirely when budget=0
+
         if args.promotion_budget > 0:
             promotion = PromotionController(
                 hierarchy_dict=hierarchy,
@@ -1912,7 +1827,7 @@ def main() -> int:
                 tau=args.tau,
             )
         else:
-            log.info("V5_FIX P3: promotion_budget=0 — disabling promotion + decay controllers")
+            log.info("promotion_budget=0 — disabling promotion and decay controllers")
             promotion = None
             decay = None
 
@@ -1958,7 +1873,7 @@ def main() -> int:
                 elif args.method == "B_llm_nav":
                     rec = run_llm_nav(ctx, qid, query, query_idx, use_promotion=False)
                 elif args.method == "V5":
-                    # v5_fix 2026-06-26: P3 — promotion_budget=0 disables promotion (predicted +F1 on 10M)
+
                     rec = run_llm_nav(ctx, qid, query, query_idx, use_promotion=(args.promotion_budget > 0))
                 else:
                     raise ValueError(f"unknown method {args.method}")

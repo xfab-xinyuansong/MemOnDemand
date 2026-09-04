@@ -1,21 +1,4 @@
-"""Dual memory index with distilled and detailed ChromaDB collections.
-
-Per the MemOnDemand dual-index design:
-- distilled_index always returns candidates (id + distance + minimal metadata)
-- detailed_index by default returns ID/score only — detailed *text* is NOT
-  loaded into LLM context unless the caller explicitly opts in via
-  load_detailed_payload(ids) (which the promotion controller will do).
-
-This design ensures that token-budget accounting is honest: simply *finding* a
-candidate detailed match does not consume detailed-context tokens. Only an
-explicit promotion + payload load consumes them.
-
-Naming convention:
-    distilled_<dataset>_<run_id>
-    detailed_<dataset>_<run_id>
-
-Both collections share the same embedding backend (local sentence-transformers).
-"""
+"""Dual memory index with distilled and detailed ChromaDB collections."""
 from __future__ import annotations
 
 import logging

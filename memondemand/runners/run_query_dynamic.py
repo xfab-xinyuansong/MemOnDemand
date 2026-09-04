@@ -1,24 +1,4 @@
-"""
-V5 Dynamic Query Runner
-==============================================
-Query-time LLM Navigation (DESCEND/LATERAL/ANSWER/STOP_INSUFFICIENT)
-+ On-demand Promotion + Answer generation.
-
-Usage:
-  python run_query_dynamic.py \
-    --tier 10M \
-    --hierarchy results/v5/erag_10M/hierarchy/hierarchy.json \
-    --queries manifests/erag_queries.parquet \
-    --out_dir results/v5/erag_10M/query_run \
-    --method V5 \
-    --max_queries 500 \
-    --max_nav_steps 8 \
-    --top_k_candidates 6
-
-Outputs:
-  out_dir/answers.jsonl       # one JSON per query
-  out_dir/run_summary.json    # aggregate stats + timing
-"""
+"""V5 Dynamic Query Runner"""
 from __future__ import annotations
 
 import argparse

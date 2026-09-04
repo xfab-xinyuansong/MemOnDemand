@@ -1,10 +1,7 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-"""
-DNS workaround: university DNS (10.4.2.2) returns SERVFAIL for .api.aws and .azure.com domains.
-Import this at the TOP of any runner script to fix connectivity.
-"""
+# Optional hostname overrides for environments with restricted DNS resolution.
 import socket as _socket
 
 _DNS_OVERRIDES = {

@@ -1,21 +1,4 @@
-"""Evaluator for the MemOnDemand 1.14B EnterpriseRAG-Bench pipeline.
-
-Loads answers.jsonl (no gold info inside) + erag_query_gold_evaluator_only.jsonl
-(gold info, evaluator-only — never exposed to the runner).
-
-Per-query metrics:
-  precision = |cited & expected| / max(1, |cited|)
-  recall    = |cited & expected| / max(1, |expected|)
-  f1        = 2 P R / (P + R)
-
-LLM score (0..1): the configured judge judges the answer 0..5 vs the reference;
-                  if reference is empty, score based on factuality vs query alone.
-
-Aggregate per (method, tier):
-  mean_f1, mean_precision, mean_recall, mean_llm_score
-  n_answered, n_stop, n_total, mean_wall_seconds, mean_cost_usd, total_cost_usd
-  V5: n_promote_events_total, n_demote_events_total, mean_n_navigation_steps
-"""
+"""Evaluator for the MemOnDemand 1.14B EnterpriseRAG-Bench pipeline."""
 from __future__ import annotations
 try:
     from memondemand.core import dns_patch  # noqa: F401

@@ -1,19 +1,4 @@
-"""Hierarchy builder.
-
-For Step 3 we focus on the L0 level only: turn every memondemand L0 record into a
-DualNode by:
-
-  - detailed_text = the original full L0 body (canonical_label + raw_text)
-  - distilled_text = a short LLM-generated summary via `gpt_5_4_mini`
-  - source_evidence_ids = the L0 node's evidence_span_ids
-  - distilled_tokens / detailed_tokens computed via tiktoken cl100k_base
-
-Concurrency control:
-  - ThreadPoolExecutor with configurable workers (default 8)
-  - openai SDK handles 429 retries via max_retries; we add an extra
-    light-touch retry with exponential backoff for hard 429s
-  - Token usage is recorded into the supplied TokenLedger
-"""
+"""Hierarchy builder."""
 from __future__ import annotations
 
 import logging
@@ -35,10 +20,6 @@ from memondemand.methods.token_ledger import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
 DISTILL_SYSTEM_PROMPT = """You are an enterprise memory summarizer. Given a long-form L0 memory record from a corporate dataset, produce a SHORT distilled summary that:
 
 - captures the central topic, entities, time references, and any explicit decisions or values stated
@@ -57,10 +38,6 @@ DISTILL_USER_TEMPLATE = """L0 record body:
 Distilled summary:"""
 
 
-# ---------------------------------------------------------------------------
-# LLM call (Azure gpt_5_4_mini)
-# ---------------------------------------------------------------------------
-
 # Module-level Azure client cache
 _AZURE_CLIENT = None
 _AZURE_LOCK_KEY = ""
@@ -75,7 +52,7 @@ def _get_enc():
 
 
 def _ensure_azure_client():
-    """Singleton AzureOpenAI client with enlarged httpx pool (Stage 2 hotfix)."""
+    """Return a shared Azure client with a bounded HTTP connection pool."""
     global _AZURE_CLIENT
     if _AZURE_CLIENT is not None:
         return _AZURE_CLIENT
@@ -169,11 +146,6 @@ def llm_distill_one(body: str, max_retries: int = 4) -> Dict[str, Any]:
         "error": f"{type(last_err).__name__}: {str(last_err)[:200]}",
         "attempts": max_retries + 1,
     }
-
-
-# ---------------------------------------------------------------------------
-# Public entrypoint
-# ---------------------------------------------------------------------------
 
 
 def build_l0_dualnodes(
