@@ -160,7 +160,7 @@ memondemand evaluate \
 `MEMONDEMAND_API_MODEL=gpt-5.4` to use the reported judge configuration; per-question and
 aggregate evaluation files are written to the directory passed through `--out`.
 
-<sub><strong>Evaluation note.</strong> The evaluator in this repository is not identical to the official EnterpriseRAG-Bench evaluation pipeline, so local scores are not official leaderboard scores. Please refer to our submitted entry on the [official leaderboard](https://huggingface.co/spaces/onyx-dot-app/EnterpriseRAG-Bench-Leaderboard) once it is published.</sub>
+<sub><sub>Evaluation note. The evaluator in this repository is not identical to the official EnterpriseRAG-Bench evaluation pipeline, so local scores are not official leaderboard scores. Please refer to our submitted entry on the [official leaderboard](https://huggingface.co/spaces/onyx-dot-app/EnterpriseRAG-Bench-Leaderboard) once it is published.</sub></sub>
 
 ## Production Workflow
 
