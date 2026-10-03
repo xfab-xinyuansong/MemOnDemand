@@ -1,5 +1,3 @@
-"""Promotion state transition log."""
-
 from __future__ import annotations
 
 import json
@@ -27,7 +25,6 @@ class StateLogEntry:
 
 
 class StateLog:
-    """Append-only JSONL state transition log."""
 
     def __init__(self, path: str):
         self.path = Path(path)

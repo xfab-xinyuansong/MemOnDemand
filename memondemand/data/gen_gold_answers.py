@@ -11,12 +11,12 @@ GOLD_PATH = 'manifests/erag_query_gold_evaluator_only.jsonl'
 GOLD_BAK = 'manifests/erag_query_gold_evaluator_only.jsonl.bak'
 OUT_FULL = 'manifests/erag_query_gold_with_answers.jsonl'
 QUERIES_PARQUET = 'manifests/erag_queries.parquet'
-L0_PARQUET = 'manifests/erag_250M_l0_nodes.parquet'  # largest, covers all docs
+L0_PARQUET = 'manifests/erag_250M_l0_nodes.parquet'
 
 SYSTEM = 'You are an expert who provides concise, factual answers based on provided documents. Answer the question using only the information in the provided document(s). Be specific and complete.'
 
 MAX_CHARS_PER_DOC = 2000
-MAX_TOTAL_DOC_CHARS = 8000  # safety cap
+MAX_TOTAL_DOC_CHARS = 8000
 MAX_WORKERS = 8
 
 print_lock = threading.Lock()
@@ -39,7 +39,6 @@ def load_doc_lookup():
     return out
 
 def build_user_msg(question, docs):
-    # docs: list of (title, content) tuples
     parts = []
     total = 0
     for i, (t, c) in enumerate(docs):
@@ -73,7 +72,6 @@ def gen_one(rec, question_texts, doc_lookup, cost_tracker):
             usage = resp.get('usage', {})
             in_t = usage.get('input_tokens', 0)
             out_t = usage.get('output_tokens', 0)
-            # gpt-5.4 pricing approx: .25/M in, 0/M out (based on Bedrock /pricing rough estimate)
             cost = in_t / 1_000_000 * 1.25 + out_t / 1_000_000 * 10.0
             with print_lock:
                 cost_tracker['cost'] += cost
@@ -113,7 +111,6 @@ def main():
                 elapsed = time.time() - t0
                 log(f'  progress: {i+1}/{len(gold_rows)}  elapsed={elapsed:.0f}s  cost=${cost_tracker["cost"]:.3f}')
 
-    # Write full file (with question_text)
     n_filled = sum(1 for r in results.values() if r.get('gold_answer'))
     n_skipped = sum(1 for r in results.values() if r.get('status','').startswith('skipped'))
     n_failed = sum(1 for r in results.values() if r.get('status','').startswith('failed') or r.get('status','')=='exception')
@@ -131,7 +128,6 @@ def main():
             }) + '\n')
     log(f'Wrote {OUT_FULL}')
 
-    # Update original file (fill gold_answer)
     with open(GOLD_PATH, 'w') as f:
         for r in gold_rows:
             qid = r['question_id']

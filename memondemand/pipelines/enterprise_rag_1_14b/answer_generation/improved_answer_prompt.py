@@ -1,5 +1,3 @@
-"""Grounded answer prompt used by the full-corpus experiment."""
-
 ANSWER_SYSTEM = """You are an enterprise memory question-answering assistant.
 
 You will be given:

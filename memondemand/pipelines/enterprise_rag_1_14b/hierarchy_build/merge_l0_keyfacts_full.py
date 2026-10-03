@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Merge reusable L0 key facts into a full-corpus hierarchy."""
 
 from __future__ import annotations
 

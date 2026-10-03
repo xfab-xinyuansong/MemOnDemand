@@ -1,5 +1,3 @@
-"""Azure OpenAI embedding helper with environment-only credentials."""
-
 from __future__ import annotations
 
 import json
@@ -12,7 +10,7 @@ from typing import Sequence
 
 import numpy as np
 
-from memondemand.core import dns_patch  # noqa: F401
+from memondemand.core import dns_patch
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +58,6 @@ def _post(payload: dict, timeout: int = 60) -> dict:
 
 
 def embed_batch(texts: Sequence[str], max_retries: int = 12, batch_size: int = 128) -> np.ndarray:
-    """Embed texts with Azure OpenAI and return L2-normalized float32 vectors."""
     if not texts:
         return np.zeros((0, EMBED_DIM), dtype=np.float32)
 
@@ -104,7 +101,6 @@ def embed_batch(texts: Sequence[str], max_retries: int = 12, batch_size: int = 1
 
 
 class AzureEmbedder:
-    """Drop-in embedder class used by the V5 runner."""
 
     def __init__(self, model_name: str = EMBED_MODEL_NAME):
         self.model_name = model_name

@@ -1,7 +1,6 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-# Optional hostname overrides for environments with restricted DNS resolution.
 import socket as _socket
 
 _DNS_OVERRIDES = {

@@ -1,4 +1,3 @@
-"""V5 Dynamic Query Runner"""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +23,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
 AZURE_DEPLOYMENT = "gpt-5.4-mini"
 AZURE_API_VERSION = "2024-12-01-preview"
 
@@ -41,7 +39,6 @@ NAV_ACTION_STOP    = "STOP_INSUFFICIENT"
 PROMO_ACTION_PROMOTE    = "PROMOTE"
 PROMO_ACTION_KEEP_LIGHT = "KEEP_LIGHT"
 
-# ── Node structure ─────────────────────────────────────────────────────────────
 @dataclass
 class Node:
     node_id: str
@@ -52,8 +49,8 @@ class Node:
     parent_id: Optional[str]
     children_ids: List[str]
     source_evidence_ids: List[str]
-    state: str = "LIGHT"   # LIGHT | PROMOTED
-    vec: Optional[np.ndarray] = None  # populated at index time
+    state: str = "LIGHT"
+    vec: Optional[np.ndarray] = None
 
     @classmethod
     def from_dict(cls, d: Dict) -> "Node":
@@ -70,16 +67,13 @@ class Node:
         )
 
 
-# ── Hierarchy ──────────────────────────────────────────────────────────────────
 class Hierarchy:
     def __init__(self, nodes: List[Node]):
         self.by_id: Dict[str, Node] = {n.node_id: n for n in nodes}
         self.max_depth = max(n.level for n in nodes)
-        # Group by level
         self.by_level: Dict[int, List[Node]] = defaultdict(list)
         for n in nodes:
             self.by_level[n.level].append(n)
-        # child → parent map
         self.parent_map: Dict[str, str] = {}
         for n in nodes:
             for cid in n.children_ids:
@@ -95,7 +89,6 @@ class Hierarchy:
         return [self.by_id[c] for c in n.children_ids if c in self.by_id]
 
     def siblings_of(self, node_id: str) -> List[Node]:
-        """Same-level nodes with the same parent."""
         parent_id = self.parent_map.get(node_id)
         if not parent_id:
             return []
@@ -118,7 +111,6 @@ def load_hierarchy(path: str) -> Hierarchy:
     return Hierarchy(nodes)
 
 
-# ── Embedder ───────────────────────────────────────────────────────────────────
 class Embedder:
     def __init__(self, model_name: str = EMBED_MODEL):
         from sentence_transformers import SentenceTransformer
@@ -136,7 +128,6 @@ class Embedder:
 
 
 def index_hierarchy(hier: Hierarchy, embedder: Embedder) -> None:
-    """Populate vec field for all nodes (distilled embedding)."""
     log.info("Embedding %d nodes for cosine index ...", len(hier.by_id))
     t0 = time.time()
     nodes = list(hier.by_id.values())
@@ -156,7 +147,6 @@ def top_k_by_cosine(query_vec: np.ndarray, candidates: List[Node], k: int) -> Li
     return ranked[:k]
 
 
-# ── LLM Clients ───────────────────────────────────────────────────────────────
 def _azure_client():
     from openai import AzureOpenAI
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
@@ -170,7 +160,6 @@ def _azure_client():
 
 
 def call_mini(prompt: str, max_tokens: int = 512) -> Tuple[str, int, int]:
-    """Returns (text, n_in, n_out)."""
     client = _azure_client()
     resp = client.chat.completions.create(
         model=AZURE_DEPLOYMENT,
@@ -181,7 +170,6 @@ def call_mini(prompt: str, max_tokens: int = 512) -> Tuple[str, int, int]:
     return text, resp.usage.prompt_tokens, resp.usage.completion_tokens
 
 
-# ── Navigator ─────────────────────────────────────────────────────────────────
 def build_nav_prompt(query: str, current_nodes: List[Tuple[Node, float]],
                      evidence_so_far: List[Node], steps_left: int) -> str:
     node_list = "\n".join(
@@ -250,7 +238,6 @@ Answer:"""
 
 
 def parse_json_safe(text: str, default: Any) -> Any:
-    """Extract first JSON object/array from text."""
     text = text.strip()
     for pat in [r'\[.*?\]', r'\{.*?\}']:
         m = re.search(pat, text, re.DOTALL)
@@ -265,7 +252,6 @@ def parse_json_safe(text: str, default: Any) -> Any:
         return default
 
 
-# ── Per-query pipeline ─────────────────────────────────────────────────────────
 def run_single_query(
     query_id: str,
     query_text: str,
@@ -277,18 +263,15 @@ def run_single_query(
 ) -> Dict[str, Any]:
     t_wall_start = time.time()
 
-    # ── Embed query ────────────────────────────────────────────────────────
     t0 = time.time()
     q_vec = embedder.encode_one(query_text)
     t_embedding_ms = (time.time() - t0) * 1000
 
-    # ── Filter by tenant ───────────────────────────────────────────────────
     tenant_nodes_by_level: Dict[int, List[Node]] = defaultdict(list)
     for n in hier.by_id.values():
         if n.tenant_id == tenant_id or n.level > 0:
             tenant_nodes_by_level[n.level].append(n)
 
-    # Start at top level
     current_level = hier.max_depth
     current_pool = hier.top_nodes()
 
@@ -301,11 +284,9 @@ def run_single_query(
     nav_steps_taken = 0
     nav_actions: List[str] = []
 
-    # ── Navigation loop ────────────────────────────────────────────────────
     for step in range(max_nav_steps):
         steps_left = max_nav_steps - step
 
-        # Rank current pool
         t0 = time.time()
         ranked = top_k_by_cosine(q_vec, current_pool, k=top_k)
         t_retrieval_ms += (time.time() - t0) * 1000
@@ -314,7 +295,6 @@ def run_single_query(
             nav_actions.append("STOP_EMPTY_POOL")
             break
 
-        # LLM navigation decision
         nav_prompt = build_nav_prompt(query_text, ranked, evidence_nodes, steps_left)
         t0 = time.time()
         try:
@@ -333,7 +313,6 @@ def run_single_query(
         nav_actions.append(action)
 
         if action == NAV_ACTION_ANSWER or action == NAV_ACTION_STOP:
-            # Collect top-k from current pool as evidence
             for n, _ in ranked[:top_k]:
                 if n.node_id not in visited_ids:
                     evidence_nodes.append(n)
@@ -341,13 +320,11 @@ def run_single_query(
             break
 
         elif action == NAV_ACTION_DESCEND:
-            # Find target node (use top-1 if target_id missing)
             target = None
             if target_id and target_id in hier.by_id:
                 target = hier.by_id[target_id]
             else:
                 target = ranked[0][0]
-            # Collect target as evidence, then move to children
             if target.node_id not in visited_ids:
                 evidence_nodes.append(target)
                 visited_ids.add(target.node_id)
@@ -356,7 +333,6 @@ def run_single_query(
                 current_pool = children
                 current_level = max(n.level for n in children)
             else:
-                # At leaf — done
                 for n, _ in ranked[:top_k]:
                     if n.node_id not in visited_ids:
                         evidence_nodes.append(n)
@@ -364,7 +340,6 @@ def run_single_query(
                 break
 
         elif action == NAV_ACTION_LATERAL:
-            # Add current evidence, then expand to siblings
             for n, _ in ranked[:min(2, top_k)]:
                 if n.node_id not in visited_ids:
                     evidence_nodes.append(n)
@@ -374,21 +349,17 @@ def run_single_query(
             if siblings:
                 current_pool = siblings
             else:
-                # No siblings: try parent's siblings
                 parent_id = hier.parent_map.get(target.node_id)
                 if parent_id:
                     current_pool = hier.siblings_of(parent_id) or current_pool
                 break
         else:
-            # Unknown action → collect and stop
             for n, _ in ranked[:top_k]:
                 if n.node_id not in visited_ids:
                     evidence_nodes.append(n)
                     visited_ids.add(n.node_id)
             break
 
-    # Always add direct L0 fallback to ensure answerability
-    # Navigation gives hierarchy context; L0 gives grounded detail
     t0 = time.time()
     l0_nodes = hier.by_level.get(0, [])
     if l0_nodes:
@@ -399,15 +370,12 @@ def run_single_query(
                 visited_ids.add(n.node_id)
     t_retrieval_ms += (time.time() - t0) * 1000
 
-    # Final fallback: still empty → use top-level nodes
     if not evidence_nodes:
         t0 = time.time()
         fallback = top_k_by_cosine(q_vec, hier.top_nodes(), k=top_k)
         t_retrieval_ms += (time.time() - t0) * 1000
         evidence_nodes = [n for n, _ in fallback]
 
-    # ── Promotion ──────────────────────────────────────────────────────────
-    # Score candidates
     t0 = time.time()
     evidence_nodes_unique = list({n.node_id: n for n in evidence_nodes}.values())
     candidate_scores = top_k_by_cosine(q_vec, evidence_nodes_unique, k=len(evidence_nodes_unique))
@@ -426,7 +394,6 @@ def run_single_query(
     t_promotion_llm_ms = (time.time() - t0) * 1000
     n_llm_calls_promotion = 1
 
-    # Build promoted set
     promo_map: Dict[str, str] = {
         d.get("node_id", ""): d.get("decision", PROMO_ACTION_KEEP_LIGHT)
         for d in promo_decisions if isinstance(d, dict)
@@ -435,14 +402,12 @@ def run_single_query(
     context_items: List[Tuple[Node, str]] = []
     for n, _ in candidate_scores[:8]:
         decision = promo_map.get(n.node_id, PROMO_ACTION_KEEP_LIGHT)
-        # L0 nodes always use detailed_text (full content); upper nodes use distilled unless promoted
         if decision == PROMO_ACTION_PROMOTE or n.level == 0:
             context_items.append((n, n.detailed_text))
             n_promoted += 1
         else:
             context_items.append((n, n.distilled_text))
 
-    # ── Answer generation ──────────────────────────────────────────────────
     t0 = time.time()
     answer_prompt = build_answer_prompt(query_text, context_items)
     try:
@@ -452,8 +417,6 @@ def run_single_query(
         answer_text, ans_in, ans_out = "", 0, 0
     t_answer_llm_ms = (time.time() - t0) * 1000
 
-    # ── Citation check ─────────────────────────────────────────────────────
-    # L0 citation = any L0 node's doc_id appears in evidence
     l0_evidence_ids = set()
     for n in evidence_nodes_unique:
         l0_evidence_ids.update(n.source_evidence_ids)
@@ -471,18 +434,15 @@ def run_single_query(
         "n_promoted": n_promoted,
         "nav_actions": nav_actions,
         "nav_steps_taken": nav_steps_taken,
-        # Timing
         "t_embedding_ms": round(t_embedding_ms, 1),
         "t_retrieval_ms": round(t_retrieval_ms, 1),
         "t_navigation_llm_ms": round(t_navigation_llm_ms, 1),
         "t_promotion_llm_ms": round(t_promotion_llm_ms, 1),
         "t_answer_llm_ms": round(t_answer_llm_ms, 1),
         "t_wall_total_ms": round(t_wall_total_ms, 1),
-        # LLM call counts
         "n_llm_calls_navigation": n_llm_calls_navigation,
         "n_llm_calls_promotion": n_llm_calls_promotion,
         "n_llm_calls_answer": 1,
-        # Tokens
         "tokens_answer_in": ans_in,
         "tokens_answer_out": ans_out,
         "tokens_promo_in": promo_in,
@@ -490,7 +450,6 @@ def run_single_query(
     }
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier",       required=True)
@@ -512,17 +471,14 @@ def main():
     log.info("tier=%s  method=%s  max_q=%d  nav_steps=%d",
              args.tier, args.method, args.max_queries, args.max_nav_steps)
 
-    # Load hierarchy + index
     hier = load_hierarchy(args.hierarchy)
     embedder = Embedder()
     index_hierarchy(hier, embedder)
 
-    # Load queries
     df = pd.read_parquet(args.queries)
     df = df.head(args.max_queries)
     log.info("Loaded %d queries", len(df))
 
-    # Resume support
     done_ids: set = set()
     if args.resume and answers_path.exists():
         with open(answers_path) as f:
@@ -531,7 +487,6 @@ def main():
                 done_ids.add(d.get("query_id", ""))
         log.info("Resuming: %d already done", len(done_ids))
 
-    # Run queries
     t_run_start = time.time()
     n_done = len(done_ids)
     n_errors = 0
@@ -563,7 +518,6 @@ def main():
                 log.error("Query %s error: %s", qid, e)
                 n_errors += 1
 
-    # Summary
     answers = []
     with open(answers_path) as f:
         for line in f:
@@ -579,7 +533,6 @@ def main():
     mean_steps = np.mean([a["nav_steps_taken"] for a in answers]) if answers else 0
     mean_promo_n = np.mean([a["n_promoted"] for a in answers]) if answers else 0
 
-    # Cost estimate
     total_in  = sum(a.get("tokens_answer_in",0) + a.get("tokens_promo_in",0) for a in answers)
     total_out = sum(a.get("tokens_answer_out",0) + a.get("tokens_promo_out",0) for a in answers)
     cost_usd = (total_in * 0.40 + total_out * 1.60) / 1_000_000

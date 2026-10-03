@@ -1,5 +1,3 @@
-"""Product command line interface for MemOnDemand."""
-
 from __future__ import annotations
 
 import argparse

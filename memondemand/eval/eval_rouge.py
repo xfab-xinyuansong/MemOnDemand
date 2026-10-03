@@ -16,7 +16,7 @@ import json, argparse, pathlib, ast, re
 from rouge_score import rouge_scorer
 
 SCORER = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=True)
-CORRECT_THRESHOLD = 0.40   # rouge1 f1 >= this = broadly correct
+CORRECT_THRESHOLD = 0.40
 
 def rouge1_to_raw(f1):
     if f1 >= 0.80: return 5
@@ -111,7 +111,6 @@ def main():
     fout.close()
     print(f"wrote {n_written} new rows → {out_path}")
 
-    # ── Summary ────────────────────────────────────────────────────────────────
     all_rows  = [json.loads(l) for l in open(out_path)]
     n_total   = 500
     n_gold    = 470

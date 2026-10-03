@@ -1,10 +1,9 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-#!/usr/bin/env python3
 """rebuild_distilled_v2.py — 改进 L0 节点 distilled_text（精确事实提取 prompt）"""
 try:
-    from memondemand.core import dns_patch  # noqa: F401
+    from memondemand.core import dns_patch
 except Exception:
     pass
 import argparse, json, pathlib, time, threading, queue

@@ -1,9 +1,3 @@
-"""Create a tiny local MemOnDemand dataset for quickstart commands.
-
-The generated files are intentionally small and synthetic. They let users test
-the CLI wiring before pointing MemOnDemand at private enterprise data.
-"""
-
 from __future__ import annotations
 
 import json

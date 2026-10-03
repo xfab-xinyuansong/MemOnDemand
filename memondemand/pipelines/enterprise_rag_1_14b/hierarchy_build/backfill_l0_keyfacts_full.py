@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Backfill missing L0 key facts for the full EnterpriseRAG-Bench tier.
-
-The incremental output is resumable and uses a quality gate before accepting
-each generated record.
-"""
 import os, json, time, pathlib, argparse
 import concurrent.futures
 
 try:
-    from memondemand.core import dns_patch  # noqa: F401
+    from memondemand.core import dns_patch
 except ImportError:
     dns_patch = None
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Re-evaluate existing answers with the configured GPT-5.4 alias."""
 
 import sys
 

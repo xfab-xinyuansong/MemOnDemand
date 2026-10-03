@@ -1,4 +1,3 @@
-"""Dual memory index with distilled and detailed ChromaDB collections."""
 from __future__ import annotations
 
 import logging
@@ -11,7 +10,6 @@ from chromadb.api.types import EmbeddingFunction
 logger = logging.getLogger(__name__)
 
 
-# Embedding model cache (module-global so multiple DualIndex instances share)
 _CACHED_ST_MODEL: Dict[str, Any] = {}
 
 
@@ -24,7 +22,6 @@ def _get_local_embedder(model_name: str = "all-MiniLM-L6-v2"):
 
 
 class LocalEmbeddingFunction(EmbeddingFunction):
-    """ChromaDB EmbeddingFunction backed by local sentence-transformers."""
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self.model_name = model_name
@@ -46,7 +43,6 @@ class LocalEmbeddingFunction(EmbeddingFunction):
 
 
 class DualIndex:
-    """A pair of (distilled, detailed) ChromaDB collections."""
 
     def __init__(
         self,
@@ -119,7 +115,6 @@ class DualIndex:
 
     def query_detailed_ids_only(self, query_text: str, n_results: int = 10,
                                 where: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Detailed-side search: returns ONLY ids + distances + minimal metadata."""
         kwargs = dict(query_texts=[query_text], n_results=n_results,
                       include=["metadatas", "distances"])
         if where:
@@ -127,8 +122,6 @@ class DualIndex:
         return self.detailed.query(**kwargs)
 
     def load_detailed_payload(self, ids: List[str]) -> Dict[str, Any]:
-        """Explicit detailed-body loader. Caller (promotion controller) MUST pay
-        the token cost recorded via TokenLedger."""
         if not ids:
             return {"ids": [], "documents": [], "metadatas": []}
         return self.detailed.get(ids=ids, include=["documents", "metadatas"])
@@ -162,7 +155,6 @@ def _self_test() -> int:
     assert res_d.get("documents") and res_d["documents"][0]
 
     res_det = idx.query_detailed_ids_only("hello", n_results=2)
-    # detailed query MUST NOT include populated documents field
     docs = res_det.get("documents")
     assert docs is None or all(x is None for sub in docs for x in sub), \
         f"detailed query leaked documents: {docs}"

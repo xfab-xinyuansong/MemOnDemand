@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Compute Combined/DocRcl/F1/Correct/Compl/InvDoc_ratio/Promo for a tier
-using the SAME formula as all other v3-canonical rows in README.
-STOP_INSUFFICIENT excluded from denominator.
-"""
 import json, sys
 
 def num(x):
@@ -26,7 +22,6 @@ def main(per_query_path, promo_from_eval_json=None):
             seen[qid] = r
     rows = list(seen.values())
 
-    # exclude STOP_INSUFFICIENT
     judged = [r for r in rows if not r.get("is_stop_insufficient") and r.get("llm_judge_raw") is not None]
     n = len(judged)
 

@@ -1,4 +1,3 @@
-"""Run hierarchical retrieval and retain all resolved evidence citations."""
 from __future__ import annotations
 
 import argparse
@@ -23,22 +22,22 @@ REPO_ROOT = os.environ.get(
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from memondemand.core import dns_patch  # noqa: E402,F401
-from memondemand.core.api_adapter import APIError, call as api_call  # noqa: E402
-from memondemand.methods.dual_node import (  # noqa: E402
+from memondemand.core import dns_patch
+from memondemand.core.api_adapter import APIError, call as api_call
+from memondemand.methods.dual_node import (
     DualNode,
     NODE_STATE_LIGHT,
     NODE_STATE_PROMOTED,
 )
-from memondemand.methods.token_ledger import (  # noqa: E402
+from memondemand.methods.token_ledger import (
     PHASE_FINAL_ANSWER,
     PHASE_PROMOTION_DECISION,
     PHASE_RETRIEVAL,
     TokenLedger,
 )
-from memondemand.methods.promotion_controller import PromotionController  # noqa: E402
-from memondemand.methods.decay_controller import DecayController  # noqa: E402
-from memondemand.methods.state_log import (  # noqa: E402
+from memondemand.methods.promotion_controller import PromotionController
+from memondemand.methods.decay_controller import DecayController
+from memondemand.methods.state_log import (
     StateLog,
     StateLogEntry,
     EVENT_PROMOTE,
@@ -58,7 +57,6 @@ VALID_METHODS = {"B_flat", "B_fixed_hier", "B_dynamic_hier", "B_llm_nav", "V5"}
 
 
 def load_hierarchy_jsonl(path: str) -> Dict[str, DualNode]:
-    """Load newline-delimited hierarchy JSON and normalize integer levels."""
     nodes: Dict[str, DualNode] = {}
     with open(path) as f:
         for line in f:
@@ -75,12 +73,10 @@ def load_hierarchy_jsonl(path: str) -> Dict[str, DualNode]:
 
 
 def build_parent_child(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
-    """Index child identifiers for fast parent-to-child lookup."""
     out = {}
     for nid, n in hierarchy.items():
         kids = n.extra.get("children_ids", []) or n.extra.get("child_node_ids", []) or []
         if not kids:
-            # Fallback: for L1 nodes, use source_evidence_ids (L0 leaves under this cluster)
             if n.level == "L1":
                 kids = list(n.source_evidence_ids or [])
         out[nid] = list(kids)
@@ -88,7 +84,6 @@ def build_parent_child(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
 
 
 def build_parent_child_from_file(path: str) -> Dict[str, List[str]]:
-    """Build a parent-to-child index from hierarchy records."""
     parent_child: Dict[str, List[str]] = {}
     with open(path) as f:
         for line in f:
@@ -99,7 +94,6 @@ def build_parent_child_from_file(path: str) -> Dict[str, List[str]]:
             nid = d["node_id"]
             extra = d.get("extra", {}) or {}
             children = d.get("children_ids", []) or extra.get("children_ids", []) or extra.get("child_node_ids", []) or []
-            # Fallback for L1 nodes in erag schema: use source_evidence_ids (L0 leaves)
             if not children:
                 lvl = d.get("level")
                 lvl_str = f"L{lvl}" if isinstance(lvl, int) else lvl
@@ -121,7 +115,6 @@ def bucket_by_level(hierarchy: Dict[str, DualNode]) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = defaultdict(list)
     for nid, n in hierarchy.items():
         out[n.level].append(nid)
-    # Sort levels: L0, L1, ...
     return dict(out)
 
 
@@ -133,7 +126,6 @@ class Embedder:
         import os as _os, json as _json
         backend = _os.environ.get("MEMONDEMAND_EMBED_BACKEND", "minilm")
         self.backend = backend
-        # Optional query embedding cache (for azure_large to avoid per-query API)
         self._query_cache = {}
         npy_path = _os.environ.get("MEMONDEMAND_QUERY_EMB_NPY", "")
         ids_path = _os.environ.get("MEMONDEMAND_QUERY_EMB_IDS", "")
@@ -163,7 +155,6 @@ class Embedder:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
         texts_list = list(texts)
-        # Try cache first for all texts; only call backend for misses
         if self._query_cache:
             out = np.zeros((len(texts_list), self.dim), dtype=np.float32)
             misses = []
@@ -184,10 +175,8 @@ class Embedder:
                     miss_vecs = self.model.encode(misses, **params).astype(np.float32)
                 for j, idx in enumerate(miss_idx):
                     out[idx] = miss_vecs[j]
-                    # populate cache so subsequent queries reuse
                     self._query_cache[misses[j]] = miss_vecs[j]
             return out
-        # No cache configured
         if self.backend == "azure_large":
             return self._azure.encode(texts_list, **kwargs).astype(np.float32)
         params = {
@@ -207,7 +196,6 @@ def _bm25_tokenize(text):
     return re.findall(r"[a-z0-9]{2,}", text.lower())
 
 def _build_bm25_index(hierarchy):
-    """Build BM25Okapi index over L0 nodes' detailed_text (full content)."""
     from rank_bm25 import BM25Okapi
     l0_ids = []
     l0_texts = []
@@ -231,55 +219,43 @@ def _get_bm25_index(ctx):
     return _BM25_CACHE['index'], _BM25_CACHE['doc_ids']
 
 def _bm25_top_k(ctx, query_text, k, filter_ids=None):
-    """Return list of (doc_id, score) for top-k BM25 hits on L0."""
     bm, all_ids = _get_bm25_index(ctx)
     q_toks = _bm25_tokenize(query_text)
     scores = bm.get_scores(q_toks)
     if filter_ids is not None:
         filter_set = set(filter_ids)
-        # Mask scores to filter set
         masked = []
         for i, did in enumerate(all_ids):
             if did in filter_set:
                 masked.append((did, float(scores[i])))
         masked.sort(key=lambda x: -x[1])
         return masked[:k]
-    # Global top-k
     import numpy as np
     top_idx = scores.argsort()[::-1][:k]
     return [(all_ids[i], float(scores[i])) for i in top_idx]
 
 
 def _bm25_then_dense_rerank(ctx, query_text, k=12, wide_k=50):
-    """BM25 retrieves wide_k candidates, then rerank by dense cosine sim using cached L0 index."""
     import os as _os, json as _json
-    # 1. BM25 wide retrieval
     bm_hits = _bm25_top_k(ctx, query_text, wide_k, filter_ids=None)
     if not bm_hits:
         return []
     cand_ids = [did for did, _ in bm_hits]
-    # 2. Get L0 dense index (from ctx.indexes or build via get_index)
     l0_idx = get_index(ctx, "L0")
     if l0_idx is None or len(l0_idx.ids) == 0:
-        # No dense index → fall back to BM25
         return bm_hits[:k]
-    # 3. Embed query (uses ctx.embedder, which has cache for azure_large via MEMONDEMAND_QUERY_EMB_NPY)
     q_vec = ctx.embedder.encode([query_text])[0]
-    # 4. Cosine rerank filtered to candidate ids
     reranked = l0_idx.search(q_vec, top_k=k, filter_ids=cand_ids)
     if not reranked:
-        # Fallback: BM25 top-k
         return bm_hits[:k]
     return reranked
 
 
 def _bm25_guided_l1_frontier(ctx, query_text, bm25_top_k=50, max_l1=8):
-    """BM25 top-N L0 hits -> L1 parents (sorted by coverage count) -> top-max_l1 L1 frontier."""
     bm_hits = _bm25_top_k(ctx, query_text, bm25_top_k, filter_ids=None)
     if not bm_hits:
         return []
     l0_set = set(did for did, _ in bm_hits)
-    # Count L1 parents by how many of their L0 children are in the BM25 hit set
     l1_coverage = {}
     for nid, n in ctx.hierarchy.items():
         if n.level != "L1":
@@ -293,7 +269,6 @@ def _bm25_guided_l1_frontier(ctx, query_text, bm25_top_k=50, max_l1=8):
     if not l1_coverage:
         return []
     sorted_l1 = sorted(l1_coverage.items(), key=lambda x: -x[1])[:max_l1]
-    # Return list of (l1_id, score) where score = coverage / max_coverage
     max_cov = sorted_l1[0][1]
     return [(nid, cov / max_cov) for nid, cov in sorted_l1]
 
@@ -366,7 +341,6 @@ def strip_cited(answer_text: str) -> str:
 
 
 def format_context_block(items: List[Tuple[str, str, str]]) -> str:
-    """items: list of (node_id, level, text)."""
     if not items:
         return "(none)"
     return "\n".join(f"- [{nid}] ({lvl}) {txt}" for nid, lvl, txt in items)
@@ -433,7 +407,6 @@ def call_llm(alias: str, system: str, user: str, *,
              phase: str = PHASE_FINAL_ANSWER,
              query_id: str = "",
              ) -> Tuple[str, int, int, float]:
-    """Generic wrapper around api_adapter.call. Returns (text, in_tok, out_tok, wall_s)."""
     t0 = time.time()
     try:
         resp = api_call(
@@ -445,7 +418,7 @@ def call_llm(alias: str, system: str, user: str, *,
             timeout=timeout,
             max_retries=3,
         )
-    except (APIError, Exception) as exc:  # noqa: BLE001
+    except (APIError, Exception) as exc:
         wall = time.time() - t0
         log.warning("LLM call failed alias=%s phase=%s: %s", alias, phase, str(exc)[:200])
         return "", 0, 0, wall
@@ -462,20 +435,13 @@ def call_llm(alias: str, system: str, user: str, *,
 
 
 def parse_nav_json(text: str) -> Dict[str, Any]:
-    """Extract first JSON object from LLM text.
-
-    v5 Step C v3 fix 3: on parse failure / empty response, force ANSWER rather
-    than STOP_INSUFFICIENT. Navigator must never refuse.
-    """
     if not text:
         return {"action": "ANSWER", "chosen_node_ids": [], "rationale": "empty_response_forced_answer"}
-    # Try direct
     text = text.strip()
     try:
         return json.loads(text)
     except Exception:
         pass
-    # Try first balanced { ... }
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
@@ -494,7 +460,6 @@ class QueryRecord:
     final_action: str = "STOP_INSUFFICIENT"
     answer_text: str = ""
     cited_evidence_ids: List[str] = field(default_factory=list)
-    # Timings
     t_query_embedding_ms: float = 0.0
     t_retrieval_ms: float = 0.0
     t_llm_navigation_seconds: float = 0.0
@@ -502,12 +467,10 @@ class QueryRecord:
     t_llm_answer_seconds: float = 0.0
     t_decay_ms: float = 0.0
     t_wall_total_seconds: float = 0.0
-    # Counts
     n_navigation_steps: int = 0
     n_promote_decisions: int = 0
     n_promote_events: int = 0
     n_demote_events: int = 0
-    # Tokens
     tokens_navigation_in: int = 0
     tokens_navigation_out: int = 0
     tokens_promotion_in: int = 0
@@ -518,7 +481,6 @@ class QueryRecord:
     tokens_answer_out: int = 0
     cost_usd: float = 0.0
     final_gov_decision: str = "ALLOW"
-    # Bookkeeping
     nav_actions: List[str] = field(default_factory=list)
     distilled_context_node_ids: List[str] = field(default_factory=list)
     detailed_context_node_ids: List[str] = field(default_factory=list)
@@ -554,10 +516,10 @@ class RunnerCtx:
     parent_child: Dict[str, List[str]]
     parent_map: Dict[str, str]
     by_level: Dict[str, List[str]]
-    level_names_sorted: List[str]  # L0..LN
+    level_names_sorted: List[str]
     top_level: str
     embedder: Embedder
-    indexes: Dict[str, CosineIndex]  # level -> CosineIndex
+    indexes: Dict[str, CosineIndex]
     alias_answer: str
     alias_navigator: str
     alias_low: str
@@ -577,7 +539,6 @@ def get_index(ctx: RunnerCtx, level: str) -> CosineIndex:
     if not ids:
         ctx.indexes[level] = CosineIndex([], np.zeros((0, ctx.embedder.dim), dtype=np.float32))
         return ctx.indexes[level]
-    # Disk cache support
     import os as _os, json as _json, hashlib as _hash
     cache_dir = _os.environ.get("MEMONDEMAND_INDEX_CACHE_DIR", "")
     cache_npy = ""
@@ -623,26 +584,21 @@ def get_sorted_levels(hierarchy: Dict[str, DualNode]) -> List[str]:
                   key=lambda s: int(s.lstrip("L")))
 
 
-# --- Per-method implementations --------------------------------------------
 
 
 MAX_CITED_PER_QUERY = 25
 
 def _cap_cited(ids, cand_ids):
-    """Truncate cited_l0 to MAX_CITED_PER_QUERY items. Preserve order: prefer
-    items in cand_ids order (which is retrieval-rank order from final_l0_retrieval)."""
     if not ids:
         return ids
     seen = set()
     out = []
-    # First pass: include cited items in cand_ids order (retrieval rank)
     for c in cand_ids:
         if c in ids and c not in seen:
             out.append(c)
             seen.add(c)
             if len(out) >= MAX_CITED_PER_QUERY:
                 return out
-    # Tail: any cited items not in cand_ids (shouldn't happen but defensive)
     for c in ids:
         if c not in seen:
             out.append(c)
@@ -655,25 +611,20 @@ def run_b_flat(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
     rec = QueryRecord(query_id=qid, query_text=query,
                       method=ctx.method, tier=ctx.tier)
     t_wall = time.time()
-    # Embed query
     t0 = time.time()
     q_vec = ctx.embedder.encode([query])[0]
     rec.t_query_embedding_ms = (time.time() - t0) * 1000
 
-    # Top-k over L0 distilled
     t0 = time.time()
     l0 = get_index(ctx, "L0")
     hits = l0.search(q_vec, top_k=ctx.top_k_distilled)
     rec.t_retrieval_ms = (time.time() - t0) * 1000
 
-    # Build context (L0 → use detailed_text)
     ctx_items: List[Tuple[str, str, str]] = []
     distilled_tok = 0
     detailed_tok = 0
     for nid, _sim in hits:
         n = ctx.hierarchy[nid]
-        # B_flat over L0 — use detailed_text (raw content) — matches
-        # B1FlatRAG-style retrieval, but we still cap text length.
         text = (n.detailed_text or n.distilled_text or "")[:2000]
         ctx_items.append((nid, n.level, text))
         detailed_tok += n.detailed_tokens or 0
@@ -691,8 +642,6 @@ def run_b_flat(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
 
     cand_ids = [nid for nid, _, _ in ctx_items]
     cited = parse_cited(answer, cand_ids)
-    # If model didn't cite explicitly, treat all shown candidates as cited
-    # (still bounded by what we showed — no hallucinated ids).
     if not cited:
         cited = cand_ids
 
@@ -707,7 +656,6 @@ def run_b_flat(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
 
 
 def run_b_hier_bfs(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
-    """Top-down BFS over the depth-K hierarchy (same logic for fixed/dynamic)."""
     rec = QueryRecord(query_id=qid, query_text=query,
                       method=ctx.method, tier=ctx.tier)
     t_wall = time.time()
@@ -715,37 +663,30 @@ def run_b_hier_bfs(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
     q_vec = ctx.embedder.encode([query])[0]
     rec.t_query_embedding_ms = (time.time() - t0) * 1000
 
-    # Descend each level, picking top-k per level (k_per_level decreasing).
     t0 = time.time()
-    levels_desc = list(reversed(ctx.level_names_sorted))  # [L4, L3, L2, L1, L0]
-    # k per level: 4 at top, then 8 at L1, then top_k_distilled at L0
+    levels_desc = list(reversed(ctx.level_names_sorted))
     chosen_ids: List[str] = []
     parent_pool: List[str] = list(ctx.by_level.get(levels_desc[0], []))
-    accumulated_hits: List[Tuple[str, str, float]] = []  # (id, level, sim)
+    accumulated_hits: List[Tuple[str, str, float]] = []
 
     for li, lvl in enumerate(levels_desc):
         idx = get_index(ctx, lvl)
         if not idx.ids:
             continue
         k = max(2, ctx.top_k_distilled // 2) if lvl != "L0" else ctx.top_k_distilled
-        # filter by children of last-chosen
         pool = parent_pool if parent_pool else idx.ids
         hits = idx.search(q_vec, top_k=k, filter_ids=pool)
         for nid, sim in hits:
             accumulated_hits.append((nid, lvl, sim))
-        # next pool = children of these hits
         parent_pool = []
         for nid, _ in hits:
             parent_pool.extend(ctx.parent_child.get(nid, []))
     rec.t_retrieval_ms = (time.time() - t0) * 1000
 
-    # Build context: prefer L0 detailed; upper levels distilled
-    # Sort by (level ascending L0 first, then by sim desc) and cap to ~top_k_distilled L0 + upper summaries
     ctx_items: List[Tuple[str, str, str]] = []
     detailed_tok = 0
     distilled_tok = 0
     seen: Set[str] = set()
-    # L0 first
     l0_hits = [(nid, sim) for nid, lvl, sim in accumulated_hits if lvl == "L0"]
     l0_hits.sort(key=lambda x: -x[1])
     for nid, _ in l0_hits[: ctx.top_k_distilled]:
@@ -755,7 +696,6 @@ def run_b_hier_bfs(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
         n = ctx.hierarchy[nid]
         ctx_items.append((nid, n.level, (n.detailed_text or n.distilled_text or "")[:2000]))
         detailed_tok += n.detailed_tokens or 0
-    # Upper-level summaries (cap 4)
     upper = [(nid, lvl, sim) for nid, lvl, sim in accumulated_hits if lvl != "L0"]
     upper.sort(key=lambda x: (int(x[1].lstrip("L")), -x[2]))
     for nid, lvl, _ in upper[:4]:
@@ -800,7 +740,6 @@ def run_b_hier_bfs(ctx: RunnerCtx, qid: str, query: str) -> QueryRecord:
 
 
 def expand_to_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
-    """Map cited node_ids to underlying L0 dsids. L0 nodes map to themselves."""
     out: List[str] = []
     seen: Set[str] = set()
     for nid in ids:
@@ -818,8 +757,6 @@ def expand_to_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
 
 
 def collect_descendant_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
-    """BFS over parent_child to gather all L0 leaves under the given node ids.
-    L0 nodes map to themselves. Order is preserved by first-visit."""
     out: List[str] = []
     seen: Set[str] = set()
     stack: List[str] = list(ids)
@@ -836,7 +773,6 @@ def collect_descendant_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
         if kids:
             stack.extend(kids)
         else:
-            # No children but not L0 - fall back to source_evidence_ids
             for sid in n.source_evidence_ids:
                 sn = ctx.hierarchy.get(sid)
                 if sn is not None and sn.level == "L0" and sid not in seen:
@@ -846,7 +782,6 @@ def collect_descendant_l0(ctx: RunnerCtx, ids: Sequence[str]) -> List[str]:
 
 def final_l0_retrieval(ctx: RunnerCtx, q_vec, seed_ids: Sequence[str],
                        k: int, query_text: str = "") -> List[Tuple[str, float]]:
-    """Gather descendant leaf nodes and return the highest-scoring candidates."""
     import os as _os
     if _os.environ.get("MEMONDEMAND_L0_RETRIEVAL", "") == "bm25":
 
@@ -856,11 +791,9 @@ def final_l0_retrieval(ctx: RunnerCtx, q_vec, seed_ids: Sequence[str],
             except Exception:
                 wide_k = 50
             return _bm25_then_dense_rerank(ctx, query_text, k=k, wide_k=wide_k)
-        # BM25 global top-k, ignore hierarchy seed pool entirely
         return _bm25_top_k(ctx, query_text, k, filter_ids=None)
     l0_pool = collect_descendant_l0(ctx, seed_ids)
     if not l0_pool:
-        # Fallback: global L0 top-k (rare; only when frontier has no L0 lineage)
         idx = get_index(ctx, "L0")
         return idx.search(q_vec, top_k=k)
     idx = get_index(ctx, "L0")
@@ -869,7 +802,6 @@ def final_l0_retrieval(ctx: RunnerCtx, q_vec, seed_ids: Sequence[str],
 
 def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                 use_promotion: bool) -> QueryRecord:
-    """LLM navigator (B_llm_nav and V5)."""
     rec = QueryRecord(query_id=qid, query_text=query,
                       method=ctx.method, tier=ctx.tier)
     t_wall = time.time()
@@ -877,15 +809,12 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
     q_vec = ctx.embedder.encode([query])[0]
     rec.t_query_embedding_ms = (time.time() - t0) * 1000
 
-    # Start at top level
     t0 = time.time()
     import os as _os_dir
     _retr_mode = _os_dir.environ.get("MEMONDEMAND_L0_RETRIEVAL", "")
     if _retr_mode == "bm25_guided":
-        # Direction A: use BM25-guided L1 frontier as starting point
         frontier_hits = _bm25_guided_l1_frontier(ctx, query, bm25_top_k=50, max_l1=8)
         if not frontier_hits:
-            # Fallback to top-level cosine
             top_idx = get_index(ctx, ctx.top_level)
             frontier_hits = top_idx.search(q_vec, top_k=8)
     else:
@@ -894,9 +823,9 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
     rec.t_retrieval_ms += (time.time() - t0) * 1000
 
     visible_frontier: List[Tuple[str, float]] = list(frontier_hits)
-    visited_distilled: Dict[str, str] = {}  # node_id -> distilled_text
-    promoted_detailed: Dict[str, str] = {}  # node_id -> detailed_text
-    answered_evidence_ids: List[str] = []  # final cited candidate pool
+    visited_distilled: Dict[str, str] = {}
+    promoted_detailed: Dict[str, str] = {}
+    answered_evidence_ids: List[str] = []
     prior_actions: List[str] = []
 
     decision: Dict[str, Any] = {"action": "ANSWER"}
@@ -906,9 +835,7 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             decision = {"action": "ANSWER", "chosen_node_ids": [],
                         "rationale": "empty_frontier_forced_answer"}
             break
-        # Cap frontier to 16 items
         front = visible_frontier[:16]
-        # Build prompt
         block_lines = []
         for nid, sim in front:
             n = ctx.hierarchy.get(nid)
@@ -948,26 +875,22 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                     _front_levels.add(_n.level)
             _all_l0 = _front_levels and all(lvl == "L0" for lvl in _front_levels)
             if action == "ANSWER" and not _all_l0:
-                # Coerce to DESCEND on top-2 candidates
                 action = "DESCEND"
                 if not decision.get("chosen_node_ids"):
                     decision["chosen_node_ids"] = [nid for nid, _ in front[:2]]
 
         if action not in {"DESCEND", "LATERAL", "ANSWER", "STOP_INSUFFICIENT"}:
             action = "ANSWER"
-        # Hard cap: after 2 navigation actions (DESCEND/LATERAL) force ANSWER.
         import os as _os_max
         try:
             MAX_NAV_STEPS = int(_os_max.environ.get("MEMONDEMAND_MAX_NAV_STEPS", "2"))
         except Exception:
             MAX_NAV_STEPS = 2
         if rec.n_navigation_steps >= MAX_NAV_STEPS and action in {"DESCEND", "LATERAL"}:
-            # Force ANSWER if any visible/visited evidence; else STOP.
             if visible_frontier or visited_distilled or promoted_detailed:
                 action = "ANSWER"
             else:
                 action = "STOP_INSUFFICIENT"
-        # Disallow STOP_INSUFFICIENT if any evidence visible.
         if action == "STOP_INSUFFICIENT":
             if visible_frontier or visited_distilled or promoted_detailed:
                 action = "ANSWER"
@@ -987,17 +910,14 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
 
         if action == "DESCEND":
             if not chosen:
-                # fallback: take top 2 from frontier
                 chosen = [nid for nid, _ in front[:2]]
 
-            # Expand to children of chosen (or keep chosen if leaf)
             new_frontier_ids: List[str] = []
             for c in chosen:
                 kids = ctx.parent_child.get(c, [])
                 if kids:
                     new_frontier_ids.extend(kids)
                 else:
-                    # leaf — keep the chosen node itself
                     new_frontier_ids.append(c)
             new_frontier_ids = list(dict.fromkeys(new_frontier_ids))
             if not new_frontier_ids:
@@ -1008,7 +928,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             _descend_ranking = _os_dr.environ.get("MEMONDEMAND_DESCEND_RANKING", "cosine")
             if _descend_ranking == "bm25":
 
-                # For L0 children, use BM25; otherwise fall back to cosine
                 if child_level == "L0":
                     bm_hits = _bm25_top_k(ctx, query, 16, filter_ids=new_frontier_ids)
                     ranked = bm_hits
@@ -1023,8 +942,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
 
             if use_promotion and ctx.promotion is not None:
                 tp = time.time()
-                # Candidates: top L0 nodes in the new frontier + any
-                # chosen nodes that are already L0.
                 cand_pool: List[str] = []
                 for nid, _ in ranked[: ctx.max_detailed_load * 2]:
                     if ctx.hierarchy[nid].level == "L0":
@@ -1032,8 +949,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                 for c in chosen:
                     if ctx.hierarchy[c].level == "L0" and c not in cand_pool:
                         cand_pool.append(c)
-                # Fairness: a node must not have been "marked used" this
-                # query yet (mark_detail_used is only called AFTER answer).
                 cand_pool = [c for c in cand_pool
                              if ctx.hierarchy[c].last_used_query_idx < query_idx]
                 if cand_pool:
@@ -1057,7 +972,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
         if action == "LATERAL":
             if not chosen:
                 chosen = [nid for nid, _ in front[:1]]
-            # siblings = parent's other children
             sib_ids: List[str] = []
             for c in chosen:
                 parent = ctx.parent_map.get(c)
@@ -1076,11 +990,9 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             visible_frontier = ranked
             continue
 
-    # ---- build final context + answer (or honor STOP_INSUFFICIENT) ----
 
     final_action = str(decision.get("action", "ANSWER")).upper().strip()
     if final_action not in {"ANSWER", "STOP_INSUFFICIENT"}:
-        # Out of steps with no terminal — default to ANSWER if any evidence
         final_action = "ANSWER" if (visited_distilled or promoted_detailed) else "STOP_INSUFFICIENT"
     rec.final_action = final_action
 
@@ -1122,13 +1034,11 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                 )
                 rec.n_promote_events += _bm25_counts.get("PROMOTE", 0)
 
-                # Do NOT load detailed_text into promoted_detailed.
             rec.t_llm_promotion_seconds += time.time() - _tp_bm25promo
 
         ctx_items: List[Tuple[str, str, str]] = []
         detailed_tok = 0
         distilled_tok = 0
-        # 1) Final L0 retrieval — these are the primary evidence
         l0_in_ctx: Set[str] = set()
         for nid, _sim in final_l0_hits:
             n = ctx.hierarchy.get(nid)
@@ -1153,7 +1063,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
                     l0_in_ctx.add(nid)
                 else:
                     distilled_tok += n.distilled_tokens or 0
-        # 3) Up to a few upper-level summaries for context (from visible frontier)
         upper_added = 0
         for nid, _sim in visible_frontier[:6]:
             if upper_added >= 4:
@@ -1166,7 +1075,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
             ctx_items.append((nid, n.level, (n.distilled_text or "")[:500]))
             distilled_tok += n.distilled_tokens or 0
             upper_added += 1
-        # 4) Top-up: backfill from visited distilled if we have <4 items
         if len(ctx_items) < 4:
             for nid, txt in list(visited_distilled.items())[:6]:
                 if any(c[0] == nid for c in ctx_items):
@@ -1198,7 +1106,6 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
         else:
             cited_l0 = []
         if not cited_l0:
-            # Fallback: every L0 node actually shown in the answer context
             cited_l0 = [nid for nid in cand_ids
                         if ctx.hierarchy.get(nid) is not None
                         and ctx.hierarchy[nid].level == "L0"]
@@ -1208,21 +1115,18 @@ def run_llm_nav(ctx: RunnerCtx, qid: str, query: str, query_idx: int,
         rec.detailed_context_node_ids = [c for c in cand_ids if ctx.hierarchy[c].level == "L0"]
         rec.promoted_node_ids = list(promoted_detailed.keys())
 
-        # V5: mark used for promotion controller (after answer)
         if use_promotion and ctx.promotion is not None:
             for nid in promoted_detailed.keys():
                 ctx.promotion.mark_detail_used(nid, query_idx,
                                                query_id=qid,
                                                state_log=ctx.state_log)
     else:
-        # STOP_INSUFFICIENT: emit empty answer, no citations
         rec.answer_text = ""
         rec.cited_evidence_ids = []
         rec.distilled_context_node_ids = []
         rec.detailed_context_node_ids = []
         rec.promoted_node_ids = []
 
-    # V5: decay cycle every query (only if promotion enabled)
     if use_promotion and ctx.decay is not None:
         tdc = time.time()
         demote_ids, reasons, keep_scores = ctx.decay.select_for_demotion(
@@ -1272,14 +1176,12 @@ def main() -> int:
     state_log_path = out_dir / "state_log.ndjson"
     summary_path = out_dir / "run_summary.json"
 
-    # Detect tier from output path or hierarchy
     tier = "unknown"
     for t in ("10M", "20M", "50M", "100M", "150M", "250M"):
         if f"erag_{t}" in str(args.hierarchy) or f"erag_{t}" in str(args.out):
             tier = t
             break
 
-    # ----- Load hierarchy -----
     log.info("loading hierarchy from %s ...", args.hierarchy)
     hierarchy = load_hierarchy_jsonl(args.hierarchy)
     parent_child = build_parent_child_from_file(args.hierarchy)
@@ -1295,9 +1197,7 @@ def main() -> int:
     log.info("hierarchy: %d nodes, levels=%s, top=%s",
              len(hierarchy), level_names, top_level)
 
-    # ----- Load queries -----
     df = pd.read_parquet(args.queries)
-    # Deterministic order seed
     if args.query_order_seed:
         df = df.sample(frac=1.0, random_state=args.query_order_seed).reset_index(drop=True)
     if args.n_smoke > 0:
@@ -1305,7 +1205,6 @@ def main() -> int:
     log.info("loaded %d queries (seed=%d, n_smoke=%d)",
              len(df), args.query_order_seed, args.n_smoke)
 
-    # ----- Resume support -----
     done_ids: Set[str] = set()
     if args.resume and answers_path.exists():
         with open(answers_path) as f:
@@ -1322,11 +1221,9 @@ def main() -> int:
                     pass
         log.info("resume: %d already done", len(done_ids))
 
-    # ----- Embedder + initial indexes -----
     embedder = Embedder()
     indexes: Dict[str, CosineIndex] = {}
 
-    # ----- Controllers (V5 only) -----
     ledger = TokenLedger(run_id=f"v5_{args.method}_{tier}",
                          method=args.method, alias_status="CONFIRMED")
     state_log: Optional[StateLog] = None
@@ -1373,14 +1270,11 @@ def main() -> int:
         promotion=promotion, decay=decay,
     )
 
-    # Pre-build L0 index (always needed for B_flat)
     get_index(ctx, "L0")
-    # Pre-build top-level for nav methods
     if args.method in {"B_llm_nav", "V5", "B_fixed_hier", "B_dynamic_hier"}:
         for lvl in level_names:
             get_index(ctx, lvl)
 
-    # ----- Run loop -----
     n_done = len(done_ids)
     n_errors = 0
     t_run_start = time.time()
@@ -1403,7 +1297,7 @@ def main() -> int:
                     rec = run_llm_nav(ctx, qid, query, query_idx, use_promotion=(args.promotion_budget > 0))
                 else:
                     raise ValueError(f"unknown method {args.method}")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.error("query %s error: %s", qid, str(exc)[:300])
                 n_errors += 1
                 rec = QueryRecord(query_id=qid, query_text=query,
@@ -1420,15 +1314,12 @@ def main() -> int:
                          n_done, len(df), elapsed,
                          elapsed / max(1, n_done - len(done_ids)))
             if n_done % args.checkpoint_every == 0:
-                # Just write an intermediate summary file
                 _write_summary(answers_path, summary_path, args, tier,
                                partial=True)
     finally:
         f_out.close()
 
-    # Final summary
     _write_summary(answers_path, summary_path, args, tier, partial=False)
-    # Export ledger
     try:
         ledger_path = out_dir / "token_ledger.json"
         out_data = {

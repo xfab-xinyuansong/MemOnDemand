@@ -1,7 +1,6 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-#!/usr/bin/env python3
 """
 build_key_facts_diff.py — 差集 L0 key_facts 构建
 从上一规模的 hierarchy (已有 key_facts) 中复用已有 doc_id 的 key_facts，
@@ -16,7 +15,7 @@ build_key_facts_diff.py — 差集 L0 key_facts 构建
 输出: results/v5_emb_large_llm_distill/erag_{tier}/hierarchy/hierarchy_v3keyfacts.json
 """
 import sys, json, pathlib, time, threading, queue, argparse
-try: from memondemand.core import dns_patch  # noqa: F401
+try: from memondemand.core import dns_patch
 except: pass
 
 from memondemand.core.api_adapter import call as api_call
@@ -90,7 +89,6 @@ def main():
     if args.dry_run:
         print(f"[dry_run] would extract {len(new_l0)} new L0 key_facts"); return
 
-    # Extract key_facts for NEW L0 nodes only
     extracted = dict(reused)
     lock = threading.Lock()
     q = queue.Queue()
@@ -118,7 +116,6 @@ def main():
     print(f"\n  Done: {len(extracted)}/{len(l0_nodes)} key_facts  errs={errs[0]}  "
           f"wall={int(time.time()-t0)}s", flush=True)
 
-    # Write output
     print(f"[{args.tier}] Writing {out_path} ...", flush=True)
     with open(out_path, "w") as f:
         for n in nodes_all:

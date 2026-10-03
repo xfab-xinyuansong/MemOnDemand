@@ -65,9 +65,7 @@ def extract_one(rec, doc_lookup, cost_tracker):
     cand_ids = rec.get('detailed_context_node_ids', []) or []
     orig_cited = rec.get('cited_evidence_ids', []) or []
     if not a or not cand_ids:
-        # No answer or no candidates: keep original
         return {'query_id': qid, 'new_cited': orig_cited, 'fallback': True, 'cost': 0.0}
-    # Build candidate doc snippets (cap to 12)
     cand_ids = cand_ids[:12]
     doc_lines = []
     for did in cand_ids:
@@ -88,7 +86,6 @@ def extract_one(rec, doc_lookup, cost_tracker):
             with print_lock:
                 cost_tracker['cost'] += cost
             if not new_cited:
-                # Empty LLM response -> fallback to original (avoid empty citations)
                 return {'query_id': qid, 'new_cited': orig_cited, 'fallback': True, 'cost': cost, 'raw': text[:200]}
             return {'query_id': qid, 'new_cited': new_cited, 'fallback': False, 'cost': cost, 'raw': text[:200]}
         except Exception as e:
@@ -132,7 +129,6 @@ def main():
     n_fallback = sum(1 for r in results.values() if r.get('fallback'))
     n_changed = 0
     n_empty_new = 0
-    # Write new answers.jsonl with updated cited
     with open(out_answers, 'w') as f:
         for r in recs:
             qid = r['query_id']

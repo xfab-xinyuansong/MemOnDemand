@@ -1,5 +1,3 @@
-"""On-demand promotion controller used by V5 runners."""
-
 from __future__ import annotations
 
 import math
@@ -26,13 +24,6 @@ def _tokens(text: str) -> set[str]:
 
 
 class PromotionController:
-    """Budgeted promotion gate.
-
-    The release implementation is deterministic and dependency-free. It scores
-    candidates by lexical overlap between the query and each node's distilled
-    plus detailed memory, then promotes the strongest still-light nodes while
-    respecting the configured budget.
-    """
 
     def __init__(
         self,

@@ -18,10 +18,10 @@ import numpy as np
 from memondemand.core.api_adapter import load_env
 load_env()
 
-EMBED_BATCH = 1           # Azure embed hangs on batch>5; single safer
+EMBED_BATCH = 1
 EMBED_MODEL = os.environ.get("AZURE_EMBED_LARGE_DEPLOYMENT", "text-embedding-3-large")
 EMBED_API_VERSION = "2024-02-01"
-CORRECT_THRESHOLD = 0.50  # sim >= this → Correct (lenient, matches LLM "broadly aligned")
+CORRECT_THRESHOLD = 0.50
 
 def get_client():
     from openai import AzureOpenAI
@@ -32,7 +32,6 @@ def get_client():
     )
 
 def embed_batch(client, texts):
-    """Embed a list of texts, return list of np.ndarray."""
     if not texts:
         return []
     resp = client.embeddings.create(model=EMBED_MODEL, input=texts, timeout=60.0)
@@ -45,7 +44,6 @@ def cosine_sim(a, b):
     return float(np.dot(a, b) / denom)
 
 def sim_to_raw(sim):
-    """Map 0-1 similarity to 1-5 int scale."""
     return max(1, min(5, round(sim * 5)))
 
 def main():
@@ -56,7 +54,6 @@ def main():
     ap.add_argument("--resume",  action="store_true")
     args = ap.parse_args()
 
-    # Load inputs
     answers = [json.loads(l) for l in open(args.answers)]
     gold_map = {}
     for l in open(args.gold):
@@ -67,7 +64,6 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "per_query_eval.jsonl"
 
-    # Resume: skip already-done (valid score) rows
     done_ids = set()
     if args.resume and out_path.exists():
         for l in open(out_path):
@@ -79,30 +75,25 @@ def main():
                 pass
         print(f"resume: {len(done_ids)} already done")
 
-    # Filter to-do
     todo = [a for a in answers if a.get("query_id") not in done_ids]
-    # Only ANSWER queries need embedding
     answer_todo = [a for a in todo if a.get("final_action") == "ANSWER"]
     nonanswer_todo = [a for a in todo if a.get("final_action") != "ANSWER"]
     print(f"to eval: {len(answer_todo)} ANSWER + {len(nonanswer_todo)} non-ANSWER")
 
     client = get_client()
 
-    # Gather predicted and gold texts
     pred_texts, gold_texts, valid_mask = [], [], []
     for a in answer_todo:
         qid = a.get("query_id", "")
         g = gold_map.get(qid, {})
         gold_ans = g.get("gold_answer", "")
         pred_ans = a.get("answer_text", "") or a.get("answer", "") or ""
-        # strip "CITED: ..." from pred
         if "CITED:" in pred_ans:
             pred_ans = pred_ans[:pred_ans.index("CITED:")].strip()
         pred_texts.append(pred_ans or "N/A")
         gold_texts.append(gold_ans or "N/A")
         valid_mask.append(bool(gold_ans) and bool(pred_ans))
 
-    # Batch embed
     print(f"embedding {len(pred_texts) * 2} texts in batches of {EMBED_BATCH}...")
     all_texts = pred_texts + gold_texts
     all_vecs = []
@@ -116,11 +107,9 @@ def main():
     pred_vecs = all_vecs[:len(pred_texts)]
     gold_vecs = all_vecs[len(pred_texts):]
 
-    # Write results
     fout = open(out_path, "a", encoding="utf-8") if args.resume else open(out_path, "w", encoding="utf-8")
     n_written = 0
 
-    # Non-ANSWER rows: score=0
     for a in nonanswer_todo:
         qid = a.get("query_id", "")
         g = gold_map.get(qid, {})
@@ -146,7 +135,6 @@ def main():
         fout.write(json.dumps(row) + "\n")
         n_written += 1
 
-    # ANSWER rows: embedding similarity
     for i, a in enumerate(answer_todo):
         qid = a.get("query_id", "")
         g = gold_map.get(qid, {})
@@ -182,7 +170,6 @@ def main():
     fout.close()
     print(f"\nwrote {n_written} rows → {out_path}")
 
-    # Summary
     all_rows = [json.loads(l) for l in open(out_path)]
     n_total = 500
     n_gold  = 470

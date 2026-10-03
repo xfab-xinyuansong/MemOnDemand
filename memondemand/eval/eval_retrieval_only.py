@@ -1,7 +1,6 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-#!/usr/bin/env python3
 """Evaluate DocRcl/F1/InvDoc from answers.jsonl without LLM judge.
 Usage: python eval_retrieval_only.py <out_dir> [--gold gold.jsonl] [--tag exp_name]
 """
@@ -23,7 +22,6 @@ def main():
     if not ans_path.exists():
         print(f'ERROR: {ans_path} not found'); sys.exit(1)
 
-    # Load gold
     gold = {}
     for l in open(args.gold):
         r = json.loads(l)
@@ -72,7 +70,6 @@ def main():
     print(f'  InvDoc:  {invd:.2f}%')
     print(f'  Promo:   {n_promo} ({avg_promo:.2f}/q)')
 
-    # Load / update report
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     results = {}

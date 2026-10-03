@@ -22,7 +22,6 @@ def tokenize(text):
 def build_bm25(parquet_path):
     df = pd.read_parquet(parquet_path)
     doc_ids = df["doc_id"].astype(str).tolist()
-    # combine title + content + text
     texts = []
     for _, r in df.iterrows():
         title = str(r.get("title") or "")
@@ -38,7 +37,6 @@ def build_bm25(parquet_path):
 
 
 def compute_recall_at_k(retrieved_ids, expected_set):
-    """Return dict of recall at various K."""
     out = {}
     for K in [5, 10, 12, 20, 50]:
         topk = set(retrieved_ids[:K])
@@ -47,7 +45,6 @@ def compute_recall_at_k(retrieved_ids, expected_set):
 
 
 def find_ranks(retrieved_ids, expected_set):
-    """For each expected id, find its rank (1-indexed); -1 if not in top-1000."""
     ranks = []
     pos = {did: i+1 for i, did in enumerate(retrieved_ids[:1000])}
     for eid in expected_set:
@@ -75,7 +72,6 @@ def main():
         print(f"  {tier} ready in {time.time()-t0:.1f}s, |corpus|={len(doc_ids)}")
 
         recalls_at_k = {5: [], 10: [], 12: [], 20: [], 50: []}
-        # Track expected-doc ranks: only count those present in this tier's manifest
         all_ranks = []
         n_skip_no_coverage = 0
         n_skip_missing_doc = 0
@@ -83,7 +79,6 @@ def main():
             g = gold[qid]
             qtext = g["question_text"]
             exp = set(g["expected_doc_ids"])
-            # Check if all expected docs are in this tier's manifest
             tier_set = set(doc_ids)
             exp_in_tier = exp & tier_set
             if not exp_in_tier:

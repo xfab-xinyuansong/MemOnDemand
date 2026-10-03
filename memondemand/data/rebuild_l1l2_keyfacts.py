@@ -9,7 +9,7 @@ Usage: python rebuild_l1l2_keyfacts.py --tier 10M [--tier 20M]
 """
 import argparse, json, os, sys, time, concurrent.futures, pathlib
 
-try: from memondemand.core import dns_patch  # noqa: F401
+try: from memondemand.core import dns_patch
 except: pass
 
 from memondemand.core.api_adapter import call as call_llm
@@ -42,18 +42,17 @@ CHILD SUMMARIES:
 
 def build_key_facts(node_id, children, nodes, level, alias="gpt_5_4_mini"):
     if level == "L1":
-        # collect children L0 key_facts
         kf_parts = []
-        for cid in children[:60]:   # cap at 60 children
+        for cid in children[:60]:
             c = nodes.get(cid, {})
             kf = c.get("key_facts", "").strip()
             if kf:
-                kf_parts.append(kf[:400])  # cap each child
+                kf_parts.append(kf[:400])
         if not kf_parts:
             return None
-        child_kf = "\n\n".join(kf_parts[:40])[:6000]  # max 6K chars
+        child_kf = "\n\n".join(kf_parts[:40])[:6000]
         prompt = L1_PROMPT.format(n_children=len(children), child_kf=child_kf)
-    else:  # L2
+    else:
         kf_parts = []
         for cid in children:
             c = nodes.get(cid, {})
@@ -85,7 +84,6 @@ def process_tier(tier: str):
             n = json.loads(line)
             nodes[n["node_id"]] = n
 
-    # build parent→children map from L1/L2 extra.child_node_ids
     parent_child = {}
     for nid, n in nodes.items():
         extra = n.get("extra") or {}
@@ -99,7 +97,6 @@ def process_tier(tier: str):
     l2_nodes = [n for n in nodes.values() if n.get("level") == "L2"]
     print(f"  L1={len(l1_nodes)} L2={len(l2_nodes)}", flush=True)
 
-    # ---- L1 key_facts ----
     print(f"  Building L1 key_facts ({len(l1_nodes)} nodes, 8 workers) ...", flush=True)
     done = 0
     def do_l1(n):
@@ -118,7 +115,6 @@ def process_tier(tier: str):
                 print(f"    [{done}/{len(l1_nodes)}]", flush=True)
     print(f"  L1 done: {sum(1 for n in l1_nodes if nodes[n['node_id']].get('key_facts'))} have key_facts", flush=True)
 
-    # ---- L2 key_facts (using L1 key_facts just built) ----
     print(f"  Building L2 key_facts ({len(l2_nodes)} nodes) ...", flush=True)
     for n in l2_nodes:
         kids = parent_child.get(n["node_id"], [])
@@ -127,13 +123,11 @@ def process_tier(tier: str):
             nodes[n["node_id"]]["key_facts"] = kf
     print(f"  L2 done", flush=True)
 
-    # ---- write output ----
     print(f"  Writing {hier_out} ...", flush=True)
     with open(hier_out, "w") as out:
         for n in nodes.values():
             out.write(json.dumps(n, ensure_ascii=False) + "\n")
 
-    # verify
     kf_counts = {}
     for n in nodes.values():
         lv = n.get("level", "?")

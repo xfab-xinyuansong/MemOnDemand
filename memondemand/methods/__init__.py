@@ -1,5 +1,3 @@
-"""Retrieval, hierarchy, and memory-state methods."""
-
 from memondemand.methods.decay_controller import DecayController
 from memondemand.methods.dual_node import (
     DualNode,

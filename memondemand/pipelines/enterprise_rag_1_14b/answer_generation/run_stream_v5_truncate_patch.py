@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Run the 1.14B pipeline with configurable detailed-memory truncation.
-
-``MEMONDEMAND_TRUNCATE_CHARS`` controls the per-node detailed-text budget.
-``MEMONDEMAND_ANSWER_SYSTEM_OVERRIDE_FILE`` optionally loads a replacement
-answer prompt without changing the underlying runner.
-"""
 import os
 import sys
 import importlib.util
@@ -29,7 +23,6 @@ def _patched_node_text_for_answer(n, is_top_detail: bool = False) -> str:
 R._node_text_for_answer = _patched_node_text_for_answer
 print(f"[patch] MEMONDEMAND_TRUNCATE_CHARS={_TRUNCATE_CHARS} applied to _node_text_for_answer", flush=True)
 
-# Optional: improved answer system prompt override
 _override_prompt_path = os.environ.get("MEMONDEMAND_ANSWER_SYSTEM_OVERRIDE_FILE", "")
 if _override_prompt_path and os.path.exists(_override_prompt_path):
     prompt_path = Path(_override_prompt_path)

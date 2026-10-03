@@ -1,13 +1,12 @@
 import os as _os, sys as _sys
 REPO_ROOT = _os.environ.get("MEMONDEMAND_REPO_ROOT", _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..")))
 _sys.path.insert(0, REPO_ROOT)
-#!/usr/bin/env python3
 """
 rebuild_key_facts.py — 为每个 L0 节点提取结构化 key_facts 字段
 格式: bullet-point 关键事实，每条保留精确实体/值/名称
 写入 hierarchy_v3keyfacts.json
 """
-try: from memondemand.core import dns_patch  # noqa: F401
+try: from memondemand.core import dns_patch
 except: pass
 import argparse, json, pathlib, time, threading, queue
 from memondemand.core.api_adapter import call as api_call

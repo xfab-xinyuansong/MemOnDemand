@@ -1,4 +1,3 @@
-"""Build MemOnDemand's dynamic hierarchy from source-resolved L0 records."""
 from __future__ import annotations
 
 import argparse
@@ -21,16 +20,16 @@ import tiktoken
 REPO_ROOT = Path(os.environ.get("MEMONDEMAND_REPO_ROOT", Path.cwd())).resolve()
 sys.path.insert(0, str(REPO_ROOT))
 
-from memondemand.pipelines.enterprise_rag_1_14b.runtime import (  # noqa: E402
+from memondemand.pipelines.enterprise_rag_1_14b.runtime import (
     APIError,
     ConfiguredEmbedder,
     call as api_call,
 )
-from memondemand.methods.dual_node import (  # noqa: E402
+from memondemand.methods.dual_node import (
     DualNode,
     NODE_STATE_LIGHT,
 )
-from memondemand.methods.token_ledger import (  # noqa: E402
+from memondemand.methods.token_ledger import (
     PHASE_HIERARCHY_BUILD,
     PHASE_DISTILLED_GEN,
     TokenLedger,
@@ -39,10 +38,10 @@ from memondemand.methods.token_ledger import (  # noqa: E402
 logger = logging.getLogger("memondemand.enterprise_rag_1_14b.build_hierarchy")
 
 
-L1_TARGET_NODES_PER_CLUSTER = 8     # ~8 L0 children per L1 node
-L1_MAX_CLUSTERS_PER_TENANT = 32     # safety cap; for small tenants we fall back
-L1_MIN_CLUSTER_SIZE = 2             # singletons stay at L0
-L2_MAX_CHILDREN = 12                # if tenant has >12 L1 nodes we still create one L2 root (summary handles all)
+L1_TARGET_NODES_PER_CLUSTER = 8
+L1_MAX_CLUSTERS_PER_TENANT = 32
+L1_MIN_CLUSTER_SIZE = 2
+L2_MAX_CHILDREN = 12
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBED_DIM = 384
@@ -66,7 +65,6 @@ def tok_count(text: str) -> int:
 
 
 def load_l0_raw(medium_night1_dir: Path) -> List[Dict[str, Any]]:
-    """Load every L0 node from every release tenant (35 dirs, 33 release tenants)."""
     out: List[Dict[str, Any]] = []
     tenant_dirs = sorted([d for d in medium_night1_dir.iterdir()
                           if d.is_dir() and d.name.startswith("m1_")])
@@ -85,7 +83,6 @@ def load_l0_raw(medium_night1_dir: Path) -> List[Dict[str, Any]]:
 
 def filter_to_manifest(l0_nodes: List[Dict[str, Any]],
                        manifest_index: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Keep only the 9203 nodes listed in own_full_l0_nodes.parquet."""
     keep = set(manifest_index["node_id"].astype(str))
     filtered = [n for n in l0_nodes if n.get("node_id") in keep]
     logger.info(f"filtered to manifest: {len(filtered)} / {len(l0_nodes)} raw, "
@@ -94,8 +91,6 @@ def filter_to_manifest(l0_nodes: List[Dict[str, Any]],
 
 
 def _l0_distilled(label: str, tags: List[str]) -> str:
-    """Short deterministic distilled rep — first ~10 words of canonical_label
-    + up to 3 topic tags. Always non-empty unless input is fully empty."""
     label = (label or "").strip()
     if label:
         words = label.split()
@@ -108,7 +103,6 @@ def _l0_distilled(label: str, tags: List[str]) -> str:
 
 
 def _l0_detailed(node: Dict[str, Any]) -> str:
-    """Rich detailed rep — canonical_label + raw_text + structured metadata block."""
     cl = (node.get("canonical_label") or "").strip()
     ls = node.get("level_specific") or {}
     rt = (ls.get("raw_text") or "").strip() if isinstance(ls, dict) else ""
@@ -162,7 +156,6 @@ def build_l0_dualnodes(l0_raw: List[Dict[str, Any]]) -> List[DualNode]:
                 ev_ids.append(str(esid))
         for sid in n.get("source_evidence_span_ids") or []:
             ev_ids.append(str(sid))
-        # dedupe preserving order
         ev_ids = list(dict.fromkeys(ev_ids))
         if not ev_ids:
             ev_ids = [n.get("node_id", "")]
@@ -172,10 +165,7 @@ def build_l0_dualnodes(l0_raw: List[Dict[str, Any]]) -> List[DualNode]:
 
         dt_tok = tok_count(distilled)
         det_tok = tok_count(detailed)
-        # If accidentally distilled >= detailed (rare empty-record case), force
-        # distilled to be a strict prefix so the invariant holds.
         if det_tok > 0 and dt_tok >= det_tok:
-            # Take first ~half of detailed tokens as distilled fallback
             ids_full = enc().encode(detailed)
             half_ids = ids_full[: max(1, len(ids_full) // 2)]
             distilled = enc().decode(half_ids)
@@ -332,7 +322,6 @@ Tenant-level abstract:"""
 
 
 def _bundle_children_distilled(children: List[DualNode], max_chars: int = 4000) -> str:
-    """Render a children's distilled_text list as a numbered bundle."""
     out = []
     used = 0
     for i, c in enumerate(children, 1):
@@ -355,7 +344,6 @@ def _decide_n_clusters(n_l0: int) -> int:
 def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
              max_workers: int = 8, alias_status: str = "ACTIVE",
              model_alias: str = GPT54_MINI) -> Tuple[List[DualNode], Dict[str, Any]]:
-    """Cluster L0 within each tenant and produce low-level summaries."""
     stats = {
         "n_tenants": 0,
         "n_l1_clusters": 0,
@@ -377,33 +365,27 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
             continue
         stats["n_tenants"] += 1
         n_clusters = _decide_n_clusters(n_l0)
-        # Embed once per tenant
         texts = [c.distilled_text or c.detailed_text[:200] for c in children]
         vecs = embed_texts(texts)
         if n_clusters == 1:
             labels = np.zeros(n_l0, dtype=int)
         else:
             labels = kmeans_cluster(vecs, n_clusters)
-        # Group L0 by cluster label
         clusters: Dict[int, List[DualNode]] = {}
         for c, lbl in zip(children, labels):
             clusters.setdefault(int(lbl), []).append(c)
-        # Drop singleton clusters (they'd violate L1 min size)
         keep_clusters = []
         for lbl, members in clusters.items():
             if len(members) < L1_MIN_CLUSTER_SIZE:
                 stats["n_l1_skipped_singleton"] += 1
-                # Re-bind singletons into the largest neighbouring cluster
                 continue
             keep_clusters.append(members)
 
-        # Reabsorb singletons into the largest cluster
         if stats["n_l1_skipped_singleton"] and keep_clusters:
             singletons = [m for lbl, members in clusters.items() if len(members) < L1_MIN_CLUSTER_SIZE for m in members]
             biggest = max(keep_clusters, key=lambda x: len(x))
             biggest.extend(singletons)
         elif not keep_clusters and clusters:
-            # All clusters are singletons (tiny tenant) — merge into one L1
             merged = [m for members in clusters.values() for m in members]
             keep_clusters = [merged]
 
@@ -433,7 +415,6 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
         n = len(members)
         body = _bundle_children_distilled(members)
 
-        # 1. Cluster coherence decision (gpt_5_4_mini, very cheap)
         decision = llm_call_with_ledger(
             model_alias,
             L1_CLUSTER_DECISION_SYSTEM,
@@ -449,7 +430,6 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
         else:
             verdict = "HETEROGENEOUS"
 
-        # 2. Distill (gpt_5_4_mini)
         distill = llm_call_with_ledger(
             model_alias,
             L1_DISTILL_SYSTEM,
@@ -460,22 +440,18 @@ def build_l1(l0_nodes: List[DualNode], ledger: TokenLedger,
             node_id=f"l1_{tenant}_c{cidx}",
         )
         distilled_text = distill["text"]
-        # Fallback if distill failed: take first child's distilled
         if not distilled_text:
             distilled_text = (members[0].distilled_text or "[distill-fail]")[:200]
 
-        # detailed_text = full bundle (rich)
         detailed_text = (
             f"L1 cluster (tenant={tenant}, cluster_idx={cidx}, n_children={n}, "
             f"coherence={verdict})\n"
             f"Children distilled snippets:\n{body}\n"
         )
 
-        # Collect provenance: union of children's evidence ids
         ev: List[str] = []
         for c in members:
             ev.extend(c.source_evidence_ids)
-        # Dedupe preserving order
         ev = list(dict.fromkeys(ev))
 
         node_id = f"L1_{tenant}_c{cidx:03d}"
@@ -607,7 +583,6 @@ def build_l2(l1_nodes: List[DualNode], ledger: TokenLedger,
 
 
 def build_parent_child_index(all_nodes: List[DualNode]) -> Dict[str, List[str]]:
-    """node_id -> list of child node_ids (empty for L0)."""
     out: Dict[str, List[str]] = {n.node_id: list(n.extra.get("child_node_ids", []) or [])
                                  for n in all_nodes}
     return out
@@ -642,7 +617,6 @@ def main() -> int:
     if args.tokenizer != "cl100k_base":
         raise SystemExit("Only cl100k_base is supported (matches manifest tokenizer)")
 
-    # 1. Load L0 manifest index, then resolve to raw L0 records
     logger.info(f"loading manifest index {args.l0}")
     idx = pd.read_parquet(args.l0)
     raw_all = load_l0_raw(Path(args.raw_dir))
@@ -660,13 +634,11 @@ def main() -> int:
         alias_chosen_by="ml_engineer_v4_step3",
     )
 
-    # 2. Build L0 dual nodes (deterministic, no LLM)
     t_l0 = time.time()
     l0_nodes = build_l0_dualnodes(l0_raw)
     t_l0 = time.time() - t_l0
     logger.info(f"L0: {len(l0_nodes)} dual nodes built in {t_l0:.1f}s")
 
-    # 3. Build L1 (per-tenant clusters + gpt_5_4_mini decision/distill)
     t_l1 = time.time()
     l1_nodes, l1_stats = build_l1(
         l0_nodes,
@@ -678,7 +650,6 @@ def main() -> int:
     t_l1 = time.time() - t_l1
     logger.info(f"L1: {len(l1_nodes)} nodes built in {t_l1:.1f}s")
 
-    # 4. Build L2 (per-tenant root + gpt_5_4 abstraction)
     t_l2 = time.time()
     l2_nodes, l2_stats = build_l2(
         l1_nodes,
@@ -694,7 +665,6 @@ def main() -> int:
     logger.info(f"hierarchy total: {len(all_nodes)} nodes "
                 f"(L0={len(l0_nodes)} L1={len(l1_nodes)} L2={len(l2_nodes)})")
 
-    # 5. Write outputs
     hierarchy_path = out_dir / "hierarchy.json"
     with open(hierarchy_path, "w") as f:
         for n in all_nodes:
@@ -706,7 +676,6 @@ def main() -> int:
         json.dump(build_parent_child_index(all_nodes), f, indent=2)
 
     ledger.export(str(out_dir / "token_ledger.json"), include_raw=False)
-    # Also keep a raw-records copy for deeper analysis if needed
     ledger.export(str(out_dir / "token_ledger_with_records.json"), include_raw=True)
 
     report = {

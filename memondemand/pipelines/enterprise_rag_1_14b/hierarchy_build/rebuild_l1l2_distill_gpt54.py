@@ -1,24 +1,13 @@
 #!/usr/bin/env python3
-"""Rebuild L1/L2 navigation summaries with the high-level model.
-
-Does NOT touch key_facts (separate field, separate pipeline).
-Does NOT re-cluster or change node structure -- reads existing hierarchy,
-regenerates distilled_text for L1/L2 only, writes to a NEW output file
-(does not overwrite input).
-
-Usage:
-    python3 rebuild_l1l2_distill_gpt54.py --tier 60M --hier_path <path>
-"""
 import argparse, json, time, pathlib
 
 try:
-    from memondemand.core import dns_patch  # noqa: F401
+    from memondemand.core import dns_patch
 except ImportError:
     dns_patch = None
 
 from memondemand.pipelines.enterprise_rag_1_14b.runtime import call as call_llm
 
-# Prompts used by the hierarchy builder.
 L1_DISTILL_SYSTEM = """You are an enterprise memory aggregator. Given a small cluster of related L0 memory snippets from one tenant, produce a SHORT distilled summary that:
 
 - captures the central topic, entities, and time references shared by the cluster
@@ -156,7 +145,6 @@ def main():
         child_texts = []
         for cid in kids:
             c = nodes.get(cid, {})
-            # L2's children may be L1_xxx string ids OR distilled just-updated L1 nodes
             txt = (c.get("distilled_text") or "").strip()
             if txt:
                 child_texts.append(txt[:500])
@@ -176,7 +164,6 @@ def main():
         for n in nodes.values():
             out.write(json.dumps(n, ensure_ascii=False) + "\n")
 
-    # verify
     from collections import Counter
     counters = {"L0": Counter(), "L1": Counter(), "L2": Counter()}
     for n in nodes.values():

@@ -14,16 +14,14 @@ from pathlib import Path
 import pandas as pd
 from rank_bm25 import BM25Okapi
 
-# Hyperparameters
-TOP_K = 12  # match B_flat retrieval depth
+TOP_K = 12
 RRF_K = 60
-ALSO_K = [5, 10, 20]  # report @5/@10/@20 too
+ALSO_K = [5, 10, 20]
 
 
 def simple_tokenize(text):
     if not text: return []
     text = text.lower()
-    # alphanumeric tokens len>=2
     return re.findall(r"[a-z0-9]{2,}", text)
 
 
@@ -74,9 +72,7 @@ def main():
     bm25 = BM25Okapi(tokenized)
     print(f'  done in {time.time()-t2:.1f}s')
 
-    # Queries: prefer gold file, fallback to query parquet
     gold = load_gold(args.gold)
-    # Replace empty question_text from queries parquet
     qdf = pd.read_parquet(args.queries)
     qmap = dict(zip(qdf['query_id'], qdf['query_text']))
     for qid in gold:
@@ -84,7 +80,6 @@ def main():
             gold[qid]['question'] = qmap.get(qid, '')
     print(f'Loaded {len(gold)} queries')
 
-    # Load B_flat dense retrieval (top-12 from detailed_context_node_ids, order preserved)
     bflat = {}
     if Path(args.bflat_answers).exists():
         for l in open(args.bflat_answers):
@@ -104,15 +99,11 @@ def main():
         q_text = gold[qid]['question']
         exp = gold[qid]['expected']
         q_tokens = simple_tokenize(q_text)
-        # BM25 scoring
         scores = bm25.get_scores(q_tokens)
-        # Top-K by index
-        # Get top-50 then slice (cheaper than full argsort)
         top_idx = scores.argsort()[::-1][:max(ALSO_K + [TOP_K])]
         bm25_ranking = [(doc_ids[idx], float(scores[idx])) for idx in top_idx]
         bm25_topk = [d for d, _ in bm25_ranking[:TOP_K]]
 
-        # Hybrid via RRF
         dense_ranking = bflat.get(qid, [])
         rrf = {}
         for rank, did in enumerate(bm25_topk, 1):
@@ -160,7 +151,6 @@ def main():
 
     print(f'Retrieval done in {time.time()-t3:.1f}s')
 
-    # Write per-query JSONLs
     bm25_path = Path(args.out_dir) / 'bm25_solo_eval.jsonl'
     with open(bm25_path, 'w') as f:
         for r in bm25_out:
@@ -173,7 +163,6 @@ def main():
             f.write(json.dumps(r) + '\n')
     print(f'Wrote {hyb_path}')
 
-    # Summary
     summary = {
         'n_total_queries': len(sorted_qids),
         'n_queries_with_expected': len(bm25_recalls[TOP_K]),

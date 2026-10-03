@@ -1,8 +1,6 @@
-"""V5 Dynamic Hierarchy Builder"""
-
 from __future__ import annotations
 
-from memondemand.core import dns_patch  # noqa: F401
+from memondemand.core import dns_patch
 
 import argparse
 import json
@@ -26,11 +24,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─── Constants ────────────────────────────────────────────────────────────────
-EMERGENCY_DEPTH_CAP = 8       # v5_checklist §2.4 hard safety net
-MIN_NODES_FOR_LEVEL = 4       # v5_checklist §2.4: don't create a level above ≤3 nodes
-MAX_RECLUSTER_ATTEMPTS = 2    # max RECLUSTER before forcing STOP
-DISTILLED_PREFIX_CHARS = 150  # chars of content used for L0 distilled
+EMERGENCY_DEPTH_CAP = 8
+MIN_NODES_FOR_LEVEL = 4
+MAX_RECLUSTER_ATTEMPTS = 2
+DISTILLED_PREFIX_CHARS = 150
 
 AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
 AZURE_DEPLOYMENT = "gpt-5.4-mini"
@@ -41,22 +38,21 @@ BEDROCK_MODEL = "openai.gpt-5.4"
 
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# ─── Data Structures ──────────────────────────────────────────────────────────
 
 @dataclass
 class DynamicNode:
     node_id: str
-    level: int                        # 0 = L0, 1 = L1, ...
-    tenant_id: str                    # source_type from L0
-    distilled_text: str               # short summary (20-300 tokens)
-    detailed_text: str                # full content or child summaries
+    level: int
+    tenant_id: str
+    distilled_text: str
+    detailed_text: str
     distilled_tokens: int = 0
     detailed_tokens: int = 0
     parent_id: Optional[str] = None
     children_ids: List[str] = field(default_factory=list)
-    source_evidence_ids: List[str] = field(default_factory=list)  # L0 doc_ids
-    state: str = "LIGHT"              # LIGHT | PROMOTED
-    cluster_coherence: float = 0.0    # intra-cluster cosine mean (L1+)
+    source_evidence_ids: List[str] = field(default_factory=list)
+    state: str = "LIGHT"
+    cluster_coherence: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -70,10 +66,8 @@ class TokenLedger:
     total_cost_usd: float = 0.0
     n_calls: int = 0
 
-    # gpt-5.4-mini pricing (Azure, approximate)
     MINI_IN_PER_1M = 0.40
     MINI_OUT_PER_1M = 1.60
-    # gpt-5.4 pricing (Bedrock, approximate)
     GPT54_IN_PER_1M = 5.0
     GPT54_OUT_PER_1M = 15.0
 
@@ -90,7 +84,6 @@ class TokenLedger:
         self.n_calls += 1
 
 
-# ─── LLM Clients ──────────────────────────────────────────────────────────────
 
 def _azure_client():
     from openai import AzureOpenAI
@@ -109,8 +102,6 @@ def _azure_client():
 
 def call_mini(prompt: str, ledger: TokenLedger, dry_run: bool = False,
               max_tokens: int = 200) -> str:
-    """Distillation call. v5 Step C v3 fix 1: route to Bedrock gpt-5.4 (full)
-    instead of Azure gpt-5.4-mini for higher-quality cluster summaries."""
     if dry_run:
         return "[DRY-RUN summary]"
     import requests
@@ -118,7 +109,6 @@ def call_mini(prompt: str, ledger: TokenLedger, dry_run: bool = False,
                os.environ.get("AWS_BEDROCK_EXPERIMENT_KEY") or
                os.environ.get("BEDROCK_API_KEY") or "")
     if not api_key:
-        # Fallback: Azure gpt_5_4_mini when Bedrock unavailable
         import os as _os
         _az_key = (_os.environ.get("AZURE_LLM_API_KEY") or
                    _os.environ.get("AZURE_OPENAI_API_KEY") or "")
@@ -170,19 +160,13 @@ def call_mini(prompt: str, ledger: TokenLedger, dry_run: bool = False,
 
 def call_gpt54_depth(prompt: str, ledger: TokenLedger,
                      dry_run: bool = False) -> Dict[str, Any]:
-    """Call gpt-5.4 for depth decision. Returns parsed JSON dict.
-
-    Bedrock /responses API takes `input` as a flat string (not message list).
-    """
     if dry_run:
         return {"decision": "STOP", "reason": "dry_run", "suggested_k": 0}
     import requests
-    # Try multiple env var names matching what run_erag scripts set
     api_key = (os.environ.get("AWS_BEDROCK_API_KEY") or
                os.environ.get("AWS_BEDROCK_EXPERIMENT_KEY") or
                os.environ.get("BEDROCK_API_KEY") or "")
     if not api_key:
-        # Fallback: use Azure gpt_5_4_mini for depth decision when Bedrock unavailable
         log.warning("No Bedrock API key — falling back to call_mini for depth decision")
         raw = call_mini(prompt, ledger, dry_run=dry_run)
         import re as _re, json as _json
@@ -194,7 +178,6 @@ def call_gpt54_depth(prompt: str, ledger: TokenLedger,
                 pass
         return {"decision": "CREATE_NEXT_LEVEL", "reason": "mini_fallback", "suggested_k": 8}
     t0 = time.time()
-    # Bedrock /responses requires flat input string, not message list
     flat_input = f"User: {prompt}"
     payload = {
         "model": BEDROCK_MODEL,
@@ -210,21 +193,17 @@ def call_gpt54_depth(prompt: str, ledger: TokenLedger,
         log.warning("Bedrock %d error: %s — defaulting to STOP", r.status_code, r.text[:300])
         return {"decision": "STOP", "reason": f"bedrock_http_{r.status_code}", "suggested_k": 0}
     data = r.json()
-    # parse output
     text = ""
     for item in data.get("output", []):
         for c in item.get("content", []):
             if c.get("type") == "output_text":
                 text += c.get("text", "")
-    # token counts
     usage = data.get("usage", {})
     n_in = usage.get("input_tokens", 0)
     n_out = usage.get("output_tokens", 0)
     ledger.add_gpt54(n_in, n_out)
     log.debug("gpt54 depth call %.1fs  in=%d out=%d", time.time()-t0, n_in, n_out)
-    # parse JSON from text
     text = text.strip()
-    # try to extract JSON block
     import re
     m = re.search(r'\{[^{}]+\}', text, re.DOTALL)
     if m:
@@ -232,7 +211,6 @@ def call_gpt54_depth(prompt: str, ledger: TokenLedger,
             return json.loads(m.group())
         except Exception:
             pass
-    # fallback: try direct parse
     try:
         return json.loads(text)
     except Exception:
@@ -240,10 +218,8 @@ def call_gpt54_depth(prompt: str, ledger: TokenLedger,
         return {"decision": "STOP", "reason": "parse_error", "suggested_k": 0}
 
 
-# ─── Embedding ────────────────────────────────────────────────────────────────
 
 def embed_texts(texts: List[str], model_name: str = EMBED_MODEL) -> np.ndarray:
-    """Embed list of texts, return L2-normalized float32 array. Backend chosen via env MEMONDEMAND_EMBED_BACKEND."""
     import os as _os
     backend = _os.environ.get("MEMONDEMAND_EMBED_BACKEND", "minilm")
     if backend in ("azure_large", "azure_small"):
@@ -264,10 +240,8 @@ def embed_texts(texts: List[str], model_name: str = EMBED_MODEL) -> np.ndarray:
     return vecs.astype(np.float32)
 
 
-# ─── Cluster Coherence ────────────────────────────────────────────────────────
 
 def cluster_coherence(vecs: np.ndarray) -> float:
-    """Mean pairwise cosine similarity within a cluster (using centroid approx)."""
     if len(vecs) <= 1:
         return 1.0
     centroid = vecs.mean(axis=0)
@@ -280,14 +254,12 @@ def cluster_coherence(vecs: np.ndarray) -> float:
 
 
 def noise_ratio(labels: np.ndarray, min_cluster_size: int = 2) -> float:
-    """Fraction of points in clusters smaller than min_cluster_size."""
     from collections import Counter
     counts = Counter(labels)
     small = sum(cnt for cnt in counts.values() if cnt < min_cluster_size)
     return small / len(labels)
 
 
-# ─── Depth Decision Prompt ────────────────────────────────────────────────────
 
 def build_depth_prompt(
     current_depth: int,
@@ -322,7 +294,6 @@ Respond with ONLY valid JSON (no markdown):
 {{"decision": "CREATE_NEXT_LEVEL|RECLUSTER|STOP", "reason": "...", "suggested_k": <int or 0>}}"""
 
 
-# ─── Summary Prompt ──────────────────────────────────────────────────────────
 
 def build_summary_prompt(child_texts: List[str], level: int) -> str:
     sample = "\n\n---\n\n".join(t[:400] for t in child_texts[:5])
@@ -334,7 +305,6 @@ Documents:
 Write ONLY the summary, no preamble:"""
 
 
-# ─── Core Builder ─────────────────────────────────────────────────────────────
 
 def build_dynamic_hierarchy(
     l0_df: pd.DataFrame,
@@ -342,17 +312,10 @@ def build_dynamic_hierarchy(
     dry_run: bool = False,
     out_dir: Optional[Path] = None,
 ) -> tuple[List[DynamicNode], Dict[str, Any]]:
-    """
-    Build a dynamic multi-level hierarchy from L0 nodes.
-
-    Returns:
-        (all_nodes, build_report)
-    """
     t_start = time.time()
     ledger = TokenLedger()
     decision_log = []
 
-    # ── Step 1: Create L0 DynamicNodes ──────────────────────────────────────
     log.info("Creating L0 nodes from %d docs ...", len(l0_df))
     l0_nodes: List[DynamicNode] = []
     for _, row in l0_df.iterrows():
@@ -373,13 +336,11 @@ def build_dynamic_hierarchy(
     all_nodes: List[DynamicNode] = list(l0_nodes)
     nodes_per_level = [len(l0_nodes)]
 
-    # ── Step 2: Embed L0 ────────────────────────────────────────────────────
     t_embed_start = time.time()
     l0_texts = [n.distilled_text for n in l0_nodes]
     l0_vecs = embed_texts(l0_texts)
     t_embed_seconds = time.time() - t_embed_start
 
-    # ── Step 3: Dynamic Hierarchy Loop ──────────────────────────────────────
     current_nodes = l0_nodes
     current_vecs = l0_vecs
     depth = 0
@@ -391,7 +352,6 @@ def build_dynamic_hierarchy(
         n_current = len(current_nodes)
         log.info("=== Level L%d → L%d (n=%d nodes) ===", depth, depth+1, n_current)
 
-        # Stop conditions
         if n_current < MIN_NODES_FOR_LEVEL:
             log.info("STOP: only %d nodes at L%d, below minimum %d", n_current, depth, MIN_NODES_FOR_LEVEL)
             decision_log.append({"depth": depth, "decision": "STOP", "reason": f"n={n_current} < MIN={MIN_NODES_FOR_LEVEL}"})
@@ -401,7 +361,6 @@ def build_dynamic_hierarchy(
             decision_log.append({"depth": depth, "decision": "STOP", "reason": "emergency_depth_cap"})
             break
 
-        # Determine initial k
         k = max(4, int(np.sqrt(n_current)))
         k = min(k, n_current // 2)
 
@@ -409,14 +368,12 @@ def build_dynamic_hierarchy(
         cluster_nodes: List[DynamicNode] = []
 
         while True:
-            # ── Cluster ─────────────────────────────────────────────────────
             log.info("Clustering %d nodes into k=%d ...", n_current, k)
             t_cl = time.time()
             km = KMeans(n_clusters=k, random_state=42, n_init=10, max_iter=300)
             labels = km.fit_predict(current_vecs)
             t_clustering = time.time() - t_cl
 
-            # ── Compute cluster stats ────────────────────────────────────────
             cluster_sizes = []
             coherence_scores = []
             cluster_groups: Dict[int, List[int]] = {}
@@ -432,7 +389,6 @@ def build_dynamic_hierarchy(
             log.info("Cluster stats: k=%d  coh_mean=%.3f  noise=%.3f  budget_left=$%.2f",
                      k, np.mean(coherence_scores), noise_r, budget_remaining)
 
-            # ── LLM depth decision ───────────────────────────────────────────
             t_dec = time.time()
             depth_prompt = build_depth_prompt(
                 current_depth=depth,
@@ -471,7 +427,6 @@ def build_dynamic_hierarchy(
                 log.info("LLM chose STOP at depth %d", depth)
                 break
 
-            # CREATE_NEXT_LEVEL: build L(depth+1) nodes
             log.info("Creating L%d nodes (k=%d clusters) ...", depth+1, k)
             t_sum = time.time()
             cluster_nodes = []
@@ -479,19 +434,15 @@ def build_dynamic_hierarchy(
                 children = [current_nodes[i] for i in idxs]
                 child_texts = [c.distilled_text for c in children]
 
-                # LLM summary (gpt-5.4-mini)
                 summary_prompt = build_summary_prompt(child_texts, depth+1)
                 summary = call_mini(summary_prompt, ledger, dry_run=dry_run, max_tokens=300)
 
-                # Detailed = joined children distilled texts
                 detailed = "\n\n".join(f"[{c.node_id}] {c.distilled_text}" for c in children)
 
-                # All L0 evidence IDs from children
                 all_evidence = []
                 for c in children:
                     all_evidence.extend(c.source_evidence_ids)
 
-                # Use most common tenant_id
                 from collections import Counter
                 tenant_id = Counter(c.tenant_id for c in children).most_common(1)[0][0]
 
@@ -507,7 +458,6 @@ def build_dynamic_hierarchy(
                     source_evidence_ids=all_evidence,
                     cluster_coherence=coherence_scores[lbl],
                 )
-                # Set parent_id on children
                 for c in children:
                     c.parent_id = cnode.node_id
                 cluster_nodes.append(cnode)
@@ -516,16 +466,14 @@ def build_dynamic_hierarchy(
 
             t_llm_summary_total += time.time() - t_sum
             log.info("Created %d L%d nodes in %.1fs", len(cluster_nodes), depth+1, time.time()-t_sum)
-            break  # exit recluster loop
+            break
 
         if action != "CREATE_NEXT_LEVEL" or not cluster_nodes:
             break
 
-        # Advance
         all_nodes.extend(cluster_nodes)
         nodes_per_level.append(len(cluster_nodes))
 
-        # Embed new level
         new_texts = [n.distilled_text for n in cluster_nodes]
         new_vecs = embed_texts(new_texts)
 
@@ -533,32 +481,28 @@ def build_dynamic_hierarchy(
         current_vecs = new_vecs
         depth += 1
 
-    # ── Final stats ─────────────────────────────────────────────────────────
     t_total = time.time() - t_start
     final_depth = max(n.level for n in all_nodes)
 
-    # Build npl dict {L0: n, L1: n, ...} per v5_checklist §6.1
     nodes_per_level_dict = {f"L{i}": n for i, n in enumerate(nodes_per_level)}
 
     build_report = {
         "tier": "unknown",
         "n_l0_nodes": len(l0_nodes),
         "total_nodes": len(all_nodes),
-        # v5_checklist §6.1 canonical field names
         "final_hierarchy_depth": final_depth,
         "nodes_per_level": nodes_per_level_dict,
-        "t_l0_load_seconds": 0.0,          # filled at save time (loader is in main())
+        "t_l0_load_seconds": 0.0,
         "t_embedding_build_seconds": round(t_embed_seconds, 2),
         "t_hierarchy_build_seconds": round(t_total - t_embed_seconds, 2),
-        "t_vector_index_build_seconds": 0.0,  # in-memory cosine, no FAISS add cost
+        "t_vector_index_build_seconds": 0.0,
         "t_total_construction_seconds": round(t_total, 2),
         "t_clustering_seconds": round(t_total - t_embed_seconds - t_llm_depth_total - t_llm_summary_total, 2),
         "t_llm_depth_decision_seconds": round(t_llm_depth_total, 2),
         "t_llm_distillation_seconds": round(t_llm_summary_total, 2),
-        "n_llm_calls_low": ledger.n_calls - n_llm_depth_calls,    # gpt_5_4_mini (distillation)
-        "n_llm_calls_high": n_llm_depth_calls,                    # gpt_5_4 (depth decisions)
+        "n_llm_calls_low": ledger.n_calls - n_llm_depth_calls,
+        "n_llm_calls_high": n_llm_depth_calls,
         "cost_construction_usd": round(ledger.total_cost_usd, 4),
-        # Legacy / back-compat fields (kept for older consumers)
         "final_depth": final_depth,
         "nodes_per_level_list": nodes_per_level,
         "t_embedding_seconds": round(t_embed_seconds, 2),
@@ -573,7 +517,6 @@ def build_dynamic_hierarchy(
         "acceptance": {},
     }
 
-    # ── Acceptance checks ────────────────────────────────────────────────────
     n_with_both = sum(1 for n in all_nodes if n.distilled_text and n.detailed_text)
     n_distilled_lt_detailed = sum(
         1 for n in all_nodes
@@ -601,7 +544,6 @@ def build_dynamic_hierarchy(
     return all_nodes, build_report, decision_log
 
 
-# ─── Save ────────────────────────────────────────────────────────────────────
 
 def save_outputs(
     all_nodes: List[DynamicNode],
@@ -613,20 +555,17 @@ def save_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     build_report["tier"] = tier
 
-    # hierarchy.json (ndjson)
     hier_path = out_dir / "hierarchy.json"
     with open(hier_path, "w") as f:
         for node in all_nodes:
             f.write(json.dumps(node.to_dict(), ensure_ascii=False) + "\n")
     log.info("Wrote %d nodes to %s", len(all_nodes), hier_path)
 
-    # build_report.json
     rpt_path = out_dir / "build_report.json"
     with open(rpt_path, "w") as f:
         json.dump(build_report, f, indent=2, ensure_ascii=False)
     log.info("Wrote build_report to %s", rpt_path)
 
-    # decision_log.ndjson
     dec_path = out_dir / "decision_log.ndjson"
     with open(dec_path, "w") as f:
         for entry in decision_log:
@@ -634,7 +573,6 @@ def save_outputs(
     log.info("Wrote %d decision log entries to %s", len(decision_log), dec_path)
 
 
-# ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="V5 Dynamic Hierarchy Builder")
@@ -650,7 +588,6 @@ def main():
     log.info("tier=%s  l0=%s  out=%s  budget=$%.1f  dry_run=%s",
              args.tier, args.l0_parquet, args.out_dir, args.budget_usd, args.dry_run)
 
-    # Load L0
     t_load_start = time.time()
     df = pd.read_parquet(args.l0_parquet)
     t_l0_load_seconds = time.time() - t_load_start
@@ -658,7 +595,6 @@ def main():
 
     out_dir = Path(args.out_dir)
 
-    # Build
     all_nodes, build_report, decision_log = build_dynamic_hierarchy(
         l0_df=df,
         budget_usd=args.budget_usd,
@@ -670,10 +606,8 @@ def main():
         build_report["t_total_construction_seconds"] + t_l0_load_seconds, 2
     )
 
-    # Save
     save_outputs(all_nodes, build_report, decision_log, out_dir, tier=args.tier)
 
-    # Summary
     log.info("=== BUILD COMPLETE ===")
     log.info("Tier: %s | Nodes: %d | Depth: %d | Cost: $%.4f | Time: %.0fs",
              args.tier,

@@ -1,13 +1,3 @@
-"""Portable runtime helpers for the public 1.14B pipeline.
-
-The two public MemOnDemand repositories expose different model-gateway
-configurations.  This module keeps the pipeline independent of either
-deployment: semantic aliases are preserved when supported and otherwise map
-to the repository's public ``general`` alias.  Embeddings similarly use the
-repository's Azure client when present and fall back to its general embedding
-endpoint.
-"""
-
 from __future__ import annotations
 
 import os
@@ -22,7 +12,6 @@ APIError = _adapter.APIError
 
 
 def resolve_alias(alias: str) -> str:
-    """Resolve a semantic model alias without encoding deployment details."""
     env_name = "MEMONDEMAND_MODEL_ALIAS_" + alias.upper()
     configured = os.environ.get(env_name, "").strip()
     candidate = configured or alias
@@ -35,7 +24,6 @@ def resolve_alias(alias: str) -> str:
 
 
 def get_alias_config(alias: str):
-    """Return the underlying repository configuration for ``alias``."""
     return _adapter.get_alias_config(resolve_alias(alias))
 
 
@@ -44,12 +32,10 @@ def call(
     messages: List[Dict[str, str]],
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Call the configured chat backend through the repository adapter."""
     return _adapter.call(resolve_alias(alias), messages, **kwargs)
 
 
 class ConfiguredEmbedder:
-    """Small adapter over either public embedding implementation."""
 
     def __init__(self, expected_dim: int = 1536):
         self.dim = expected_dim

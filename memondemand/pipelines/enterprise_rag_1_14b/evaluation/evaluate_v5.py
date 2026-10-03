@@ -1,7 +1,6 @@
-"""Evaluator for the MemOnDemand 1.14B EnterpriseRAG-Bench pipeline."""
 from __future__ import annotations
 try:
-    from memondemand.core import dns_patch  # noqa: F401
+    from memondemand.core import dns_patch
 except ImportError:
     dns_patch = None
 
@@ -22,7 +21,7 @@ REPO_ROOT = os.environ.get("MEMONDEMAND_REPO_ROOT", str(Path.cwd()))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from memondemand.pipelines.enterprise_rag_1_14b.runtime import call as api_call  # noqa: E402
+from memondemand.pipelines.enterprise_rag_1_14b.runtime import call as api_call
 
 JUDGE_PRICE_PER_M = {"input": 0.00, "output": 0.00}
 JUDGE_ALIAS = os.environ.get("MEMONDEMAND_JUDGE_ALIAS", "gpt_5_4")
@@ -57,7 +56,6 @@ def parse_score(text: str) -> Optional[int]:
             return max(0, min(5, v))
         except Exception:
             return None
-    # fallback: first integer in [0..5]
     m = re.search(r"\b([0-5])\b", text)
     if m:
         return int(m.group(1))
@@ -77,8 +75,6 @@ def llm_judge(question: str, reference: str, submitted: str) -> Dict[str, Any]:
         reference=(reference or "")[:1500],
         submitted=submitted[:1500],
     )
-    # Rate-limit responses are retried so infrastructure throttling is not
-    # silently converted into a zero judge score.
     MAX_ATTEMPTS = int(os.environ.get("MEMONDEMAND_JUDGE_MAX_ATTEMPTS", "200"))
     resp = None
     for attempt in range(MAX_ATTEMPTS):
@@ -89,14 +85,13 @@ def llm_judge(question: str, reference: str, submitted: str) -> Dict[str, Any]:
                  {"role": "user", "content": user}],
                 max_tokens=400, temperature=0.0, timeout=60.0, max_retries=1, backoff_base=2.0,
             )
-            break  # success
-        except Exception as exc:  # noqa: BLE001
+            break
+        except Exception as exc:
             if _is_rate_limit(exc):
                 sleep_s = 30.0 + random.uniform(0, 15)
                 print(f"    [judge 429] attempt {attempt+1}/{MAX_ATTEMPTS}, sleeping {sleep_s:.0f}s ...", flush=True)
                 time.sleep(sleep_s)
-                continue  # retry, do NOT give up
-            # genuine non-429 error -> judge_error allowed
+                continue
             return {"score": 0, "rationale": f"judge_error:{type(exc).__name__}"}
     if resp is None:
         return {"score": 0, "rationale": "judge_error:max_attempts_exceeded"}
@@ -126,7 +121,6 @@ def main() -> int:
     per_q_path = out_dir / "per_query_eval.jsonl"
     eval_path = out_dir / "eval.json"
 
-    # Load gold
     gold: Dict[str, Dict[str, Any]] = {}
     with open(args.gold) as f:
         for line in f:
@@ -143,7 +137,6 @@ def main() -> int:
             }
     print(f"loaded {len(gold)} gold records")
 
-    # Load answers
     answers: List[Dict[str, Any]] = []
     with open(args.answers) as f:
         for line in f:
@@ -156,7 +149,6 @@ def main() -> int:
                 pass
     print(f"loaded {len(answers)} answer records")
 
-    # Resume support
     done_ids = set()
     if args.resume and per_q_path.exists():
         with open(per_q_path) as f:
@@ -166,7 +158,6 @@ def main() -> int:
                     continue
                 try:
                     d = json.loads(line)
-                    # Only skip rows with valid LLM scores; retry judge_errors
                     has_valid = (d.get("llm_judge_raw") or 0) > 0
                     is_non_answer = d.get("final_action", "") != "ANSWER"
                     if has_valid or is_non_answer:
@@ -202,7 +193,6 @@ def main() -> int:
                 llm_score_norm = judge_info.get("score", 0) / 5.0
                 judge_cost_total += judge_info.get("cost", 0.0)
             elif final_action != "ANSWER":
-                # STOP_INSUFFICIENT → all 0
                 precision = recall = f1 = llm_score_norm = 0.0
 
             rec = {
@@ -236,7 +226,6 @@ def main() -> int:
     finally:
         fout.close()
 
-    # Re-read all per-query for aggregate (including any already done)
     all_per = []
     with open(per_q_path) as f:
         for line in f:

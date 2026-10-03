@@ -1,4 +1,3 @@
-"""Build a dynamic hierarchy over EnterpriseRAG-Bench L0 records."""
 from __future__ import annotations
 
 import argparse
@@ -17,40 +16,32 @@ REPO_ROOT = Path(os.environ.get("MEMONDEMAND_REPO_ROOT", Path.cwd())).resolve()
 sys.path.insert(0, str(REPO_ROOT))
 
 
-from memondemand.pipelines.enterprise_rag_1_14b.hierarchy_build.build_hierarchy import (  # noqa: E402
-    # data-classes / ledger
+from memondemand.pipelines.enterprise_rag_1_14b.hierarchy_build.build_hierarchy import (
     DualNode,
     TokenLedger,
-    # token utilities
     tok_count,
     enc,
-    # LLM call wrapper
     llm_call_with_ledger,
-    # embedding + clustering
     embed_texts,
     kmeans_cluster,
     _decide_n_clusters,
-    # hierarchy builders
     build_l1,
     build_l2,
-    # provenance
     build_parent_child_index,
-    # alias constants
     GPT54_MINI,
     GPT54,
 )
-from memondemand.methods.dual_node import NODE_STATE_LIGHT  # noqa: E402
-from memondemand.methods.token_ledger import (  # noqa: E402
+from memondemand.methods.dual_node import NODE_STATE_LIGHT
+from memondemand.methods.token_ledger import (
     PHASE_HIERARCHY_BUILD,
     PHASE_DISTILLED_GEN,
 )
-from memondemand.pipelines.enterprise_rag_1_14b.runtime import get_alias_config  # noqa: E402
+from memondemand.pipelines.enterprise_rag_1_14b.runtime import get_alias_config
 
 logger = logging.getLogger("memondemand.enterprise_rag_1_14b.build_hierarchy_erag")
 
 
 def _check_api_keys() -> None:
-    """Resolve semantic aliases without reading or printing secret values."""
     get_alias_config(GPT54_MINI)
     get_alias_config(GPT54)
     logger.info("low- and high-level model aliases resolved")
@@ -90,18 +81,6 @@ def _sanitize_tiktoken_special(text: str) -> str:
 
 
 def load_erag_l0(parquet_path: Path, head: int = 0) -> List[DualNode]:
-    """Load ERAG L0 parquet and produce DualNode list.
-
-    Column mapping:
-        doc_id       → node_id
-        source_type  → tenant_id
-        title + content[:150] → distilled_text  (deterministic, no LLM)
-        title + "\\n" + text  → detailed_text
-
-    Args:
-        parquet_path: path to erag_{tier}_l0_nodes.parquet
-        head: if > 0, only load first N rows (dry-run mode)
-    """
     df = pd.read_parquet(parquet_path)
     if head > 0:
         df = df.head(head)
@@ -111,26 +90,21 @@ def load_erag_l0(parquet_path: Path, head: int = 0) -> List[DualNode]:
     for _, row in df.iterrows():
         doc_id = str(row["doc_id"])
         tenant_id = str(row.get("source_type", "unknown"))
-        # Sanitize tiktoken special tokens that appear literally in some ERAG docs
         title = _sanitize_tiktoken_special(str(row.get("title") or "").strip())
         content = _sanitize_tiktoken_special(str(row.get("content") or "").strip())
         text = _sanitize_tiktoken_special(str(row.get("text") or "").strip())
 
-        # Deterministic dual representations — no LLM involved for L0
         raw_distilled = (title + ": " + content[:150]).strip()
         raw_detailed = (title + "\n" + text).strip()
 
-        # Guard: distilled must be strictly shorter than detailed in tokens
         dt_tok = tok_count(raw_distilled)
         det_tok = tok_count(raw_detailed)
 
         if det_tok == 0:
-            # Edge case: empty detailed — pad with a sentinel so invariant holds
             raw_detailed = raw_distilled + "\n[empty-text]"
             det_tok = tok_count(raw_detailed)
 
         if dt_tok >= det_tok:
-            # Truncate distilled to strictly fewer tokens
             ids_full = enc().encode(raw_distilled)
             keep_n = max(1, det_tok - 1)
             raw_distilled = enc().decode(ids_full[:keep_n])
@@ -157,16 +131,13 @@ def load_erag_l0(parquet_path: Path, head: int = 0) -> List[DualNode]:
 
 
 def _acceptance_checks(all_nodes: List[DualNode], l0_nodes: List[DualNode]) -> Dict[str, Any]:
-    """Run the 3 required acceptance checks and return a dict of results."""
     total = len(all_nodes)
     if total == 0:
         return {"error": "no nodes"}
 
-    # 1. 100% dual representation (both texts non-empty)
     dual_ok = sum(1 for n in all_nodes if n.distilled_text and n.detailed_text)
     dual_pct = 100.0 * dual_ok / total
 
-    # 2. ≥95% distilled_tokens < detailed_tokens
     dt_lt_det = sum(
         1 for n in all_nodes
         if n.distilled_tokens > 0 and n.detailed_tokens > 0
@@ -174,7 +145,6 @@ def _acceptance_checks(all_nodes: List[DualNode], l0_nodes: List[DualNode]) -> D
     )
     dt_lt_det_pct = 100.0 * dt_lt_det / total
 
-    # 3. 100% L0 source_evidence_ids traceable back to original doc_ids
     l0_ids = {n.node_id for n in l0_nodes}
     all_ev: List[str] = []
     for n in all_nodes:
@@ -206,14 +176,11 @@ Summary (1-2 sentences, focus on main entity, topic, and key facts):"""
 
 
 def _llm_distill_one(node, ledger, alias=GPT54_MINI, max_tokens=200):
-    """Call gpt_5_4_mini to produce L0 distilled_text. Returns updated distilled string."""
-    # Extract title + content from existing distilled ("title: content[:150]") and detailed
     detailed = node.detailed_text or ''
-    # Take first 1000 chars of detailed text as content sample for summarizer
     title_part, _, _ = detailed.partition(chr(10))
     body = detailed[len(title_part)+1:][:1000] if len(detailed) > len(title_part)+1 else ''
     if not title_part and not body:
-        return node.distilled_text  # fallback: keep original
+        return node.distilled_text
     user = L0_DISTILL_USER_TMPL.format(title=title_part[:200], content=body)
     try:
         result = llm_call_with_ledger(
@@ -223,13 +190,11 @@ def _llm_distill_one(node, ledger, alias=GPT54_MINI, max_tokens=200):
         )
         text = (result.get('text') or '').strip()
         if not text:
-            return node.distilled_text  # fallback
-        # Sanitize and ensure shorter than detailed
+            return node.distilled_text
         text = _sanitize_tiktoken_special(text)
         dt_tok = tok_count(text)
         det_tok = node.detailed_tokens or tok_count(detailed)
         if det_tok > 0 and dt_tok >= det_tok:
-            # truncate
             ids_full = enc().encode(text)
             text = enc().decode(ids_full[:max(1, det_tok-1)])
             dt_tok = max(1, det_tok-1)
@@ -241,11 +206,9 @@ def _llm_distill_one(node, ledger, alias=GPT54_MINI, max_tokens=200):
 
 def llm_distill_l0_nodes(nodes, ledger, alias=GPT54_MINI, max_workers=12,
                           checkpoint_path=None, checkpoint_every=200):
-    """Replace deterministic L0 distilled_text with LLM-generated summaries."""
     import json as _json
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Load checkpoint if exists
     done = {}
     if checkpoint_path and Path(checkpoint_path).exists():
         for l in open(checkpoint_path):
@@ -288,7 +251,6 @@ def llm_distill_l0_nodes(nodes, ledger, alias=GPT54_MINI, max_workers=12,
     if ckpt_fp:
         ckpt_fp.close()
 
-    # Apply distilled back to nodes
     for n in nodes:
         if n.node_id in done:
             new_dist, new_tok = done[n.node_id]
@@ -361,7 +323,6 @@ def main() -> int:
               f"det_tok={l0_nodes[0].detailed_tokens}")
         return 0
 
-    # --- API key check (only needed for LLM calls; skipped in dry-run) ---
     _check_api_keys()
 
     ledger = TokenLedger(
@@ -436,7 +397,6 @@ def main() -> int:
     logger.info(f"  100% L0 traceable:         {'PASS' if ac['l0_traceable_pass'] else 'FAIL'} "
                 f"({ac['l0_traceable_pct']}%)")
 
-    # Console summary
     print(f"\n{'='*60}")
     print(f"ERAG Hierarchy Build — tier={args.tier_label}  DONE")
     print(f"{'='*60}")

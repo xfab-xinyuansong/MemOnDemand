@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Force-answer wrapper for a manifest of previously unanswered queries.
-
-Pass the rerun manifest through the normal ``--queries`` argument. The wrapper
-enables force-answer mode, applies the same detailed-memory truncation used by
-the full run, and optionally loads the checked-in answer prompt.
-"""
 
 from __future__ import annotations
 
@@ -15,7 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("MEMONDEMAND_FORCE_ANSWER", "1")
 
-from memondemand.pipelines.enterprise_rag_1_14b.answer_generation import (  # noqa: E402
+from memondemand.pipelines.enterprise_rag_1_14b.answer_generation import (
     run_stream_v5_force_answer_patched as R,
 )
 

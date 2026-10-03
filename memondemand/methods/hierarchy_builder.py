@@ -1,4 +1,3 @@
-"""Hierarchy builder."""
 from __future__ import annotations
 
 import logging
@@ -9,9 +8,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 import tiktoken
 
-from memondemand.core.api_adapter import get_alias_config  # noqa: E402
-from memondemand.methods.dual_node import DualNode, NODE_STATE_LIGHT  # noqa: E402
-from memondemand.methods.token_ledger import (  # noqa: E402
+from memondemand.core.api_adapter import get_alias_config
+from memondemand.methods.dual_node import DualNode, NODE_STATE_LIGHT
+from memondemand.methods.token_ledger import (
     PHASE_DISTILLED_GEN,
     PHASE_HIERARCHY_BUILD,
     TokenLedger,
@@ -38,7 +37,6 @@ DISTILL_USER_TEMPLATE = """L0 record body:
 Distilled summary:"""
 
 
-# Module-level Azure client cache
 _AZURE_CLIENT = None
 _AZURE_LOCK_KEY = ""
 _ENC = None
@@ -52,7 +50,6 @@ def _get_enc():
 
 
 def _ensure_azure_client():
-    """Return a shared Azure client with a bounded HTTP connection pool."""
     global _AZURE_CLIENT
     if _AZURE_CLIENT is not None:
         return _AZURE_CLIENT
@@ -88,11 +85,6 @@ def _read_azure_key() -> str:
 
 
 def llm_distill_one(body: str, max_retries: int = 4) -> Dict[str, Any]:
-    """Call gpt_5_4_mini for one distilled summary.
-
-    Returns dict with:
-        text, input_tokens, output_tokens, wall_seconds, success, error
-    """
     spec = get_alias_config("gpt_5_4_mini")
     client = _ensure_azure_client()
     enc = _get_enc()
@@ -157,15 +149,6 @@ def build_l0_dualnodes(
     progress_cb: Optional[Callable[[int, int], None]] = None,
     alias_status_tag: str = "",
 ) -> List[DualNode]:
-    """Build a DualNode per L0 record. L0 records are dicts like
-        {node_id, tenant_id, canonical_label, level_specific.raw_text,
-         level_specific.evidence_span_id (or source_evidence_span_ids)}
-
-    Returns a list of DualNodes (one per input record). Failed-to-distill
-    records still produce a DualNode but with `distilled_text == ""` and the
-    error captured in `extra["distill_error"]`. The Step 3 acceptance check
-    will catch these and fail the run.
-    """
     enc = _get_enc()
 
     def _node_body_and_meta(rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -173,7 +156,6 @@ def build_l0_dualnodes(
         ls = rec.get("level_specific", {}) or {}
         raw = ls.get("raw_text", "") if isinstance(ls, dict) else ""
         body = label + ("\n" + raw if raw else "")
-        # Collect provenance: evidence_span_id from level_specific, else node_id self-ref
         ev_ids: List[str] = []
         if isinstance(ls, dict):
             esid = ls.get("evidence_span_id")

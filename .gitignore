@@ -25,7 +25,6 @@ _index_cache/
 *.log
 *.bak_*
 
-# Shared research-artifact hygiene
 .AppleDouble
 ._*
 .vscode/

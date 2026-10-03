@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""Rebuild L1/L2 key facts after merging the L0 backfill.
-
-Usage:
-    python3 rebuild_l1l2_gpt54_on_merged.py --tier 60M --hier_path <path to merged hierarchy>
-    python3 rebuild_l1l2_gpt54_on_merged.py --tier 100M --hier_path <path to merged hierarchy>
-"""
 import argparse, json, time, pathlib
 
 try:
-    from memondemand.core import dns_patch  # noqa: F401
+    from memondemand.core import dns_patch
 except ImportError:
     dns_patch = None
 
@@ -145,7 +139,6 @@ def main():
         for n in nodes.values():
             out.write(json.dumps(n, ensure_ascii=False) + "\n")
 
-    # verify counts by level
     kf_counts, total = {}, {}
     for n in nodes.values():
         lv = n.get("level", "?")

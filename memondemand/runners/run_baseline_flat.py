@@ -1,7 +1,3 @@
-"""
-V5 Baseline: B_flat — Flat Dense RAG (no hierarchy, no navigation, no promotion)
-Top-k embedding search over ALL L0 nodes → direct answer.
-"""
 from __future__ import annotations
 import argparse, json, logging, os, time
 from pathlib import Path
@@ -50,7 +46,6 @@ def main():
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     answers_path = out_dir / "answers.jsonl"
 
-    # Load L0 nodes only
     nodes, texts = [], []
     with open(args.hierarchy) as f:
         for line in f:
@@ -63,7 +58,6 @@ def main():
     log.info("Embedding L0 nodes...")
     vecs = embed_texts(texts)
 
-    # Load queries
     df = pd.read_parquet(args.queries).head(args.max_queries)
 
     done_ids = set()
